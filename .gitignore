@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+.env
+.env.*
+!.env.example
+dist-ssr
+*.local
+.tmp-frames
+scripts/.build
+public/models/compressed
+public/models/legacy/
+# Huge unused exports — keep deploy models tracked (sej, idle, talking, entry)
+public/models/choochaR.fbx
+public/models/ccc06.fbx
+*.raw.glb
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

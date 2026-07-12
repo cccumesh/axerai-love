@@ -1324,9 +1324,10 @@ function App() {
         })
 
         const fullResponse = await askGemini(prompt)
+        const cleanResponse = prepareMyraSpeechText(fullResponse)
 
-        await persistHistoryEntry('myra', prepareMyraSpeechText(fullResponse))
-        console.log('[Jarvis] Myra says:', fullResponse)
+        await persistHistoryEntry('myra', cleanResponse)
+        console.log('[Jarvis] Myra says:', cleanResponse)
         deliverMyraGeminiResponse(fullResponse, resumeMicAfterGemini)
       } catch (error) {
         console.error('[Jarvis] Gemini AI error:', error)
@@ -1959,7 +1960,8 @@ function App() {
 
     const finishWelcome = async (text) => {
       markBootComplete()
-      await persistHistoryEntry('myra', prepareMyraSpeechText(text))
+      const cleanText = prepareMyraSpeechText(text)
+      await persistHistoryEntry('myra', cleanText)
       deliverMyraGeminiResponse(text, async () => {
         const ready = await prepareJarvisMode()
         if (!ready) return
@@ -1994,7 +1996,8 @@ function App() {
       })
 
       const fullResponse = await askGemini(prompt)
-      console.log(`[Jarvis] Myra ${isReturnScan ? 'resume' : 'welcome'}:`, fullResponse)
+      const cleanResponse = prepareMyraSpeechText(fullResponse)
+      console.log(`[Jarvis] Myra ${isReturnScan ? 'resume' : 'welcome'}:`, cleanResponse)
       await finishWelcome(fullResponse)
     } catch (error) {
       console.error('[Jarvis] Welcome Gemini error:', error)

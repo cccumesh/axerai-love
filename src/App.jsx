@@ -2,7 +2,10 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { AmbientLight, DirectionalLight, Clock } from 'three'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
 import Tesseract from 'tesseract.js'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import {
+  askGeminiViaProxy,
+  USE_API_PROXY,
+} from './apiProxy.js'
 import {
   MYRA_SYSTEM_PROMPT,
   appendMyraHistory,
@@ -37,24 +40,38 @@ import {
 } from './myraLedger.js'
 
 const GEMINI_API_KEY = String(import.meta.env.VITE_GEMINI_API_KEY ?? '').trim()
-const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null
+let geminiClient = null
+
+async function getGeminiClient() {
+  if (USE_API_PROXY || !GEMINI_API_KEY) return null
+  if (!geminiClient) {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    geminiClient = new GoogleGenerativeAI(GEMINI_API_KEY)
+  }
+  return geminiClient
+}
+
+function isGeminiConfigured() {
+  return USE_API_PROXY || Boolean(GEMINI_API_KEY)
+}
 
 function logAxeraiBuildConfig() {
-  const geminiOk = Boolean(GEMINI_API_KEY)
+  const geminiOk = isGeminiConfigured()
   const elevenOk = isElevenLabsConfigured()
   const ledgerOk = isLedgerConfigured()
   console.info(
-    `[Axerai] Keys in build — Gemini: ${geminiOk ? 'yes' : 'MISSING'}, ElevenLabs: ${elevenOk ? 'yes' : 'MISSING'}, Supabase: ${ledgerOk ? 'yes' : 'MISSING'}, host: ${window.location.hostname}`,
+    `[Axerai] Runtime — Gemini: ${geminiOk ? (USE_API_PROXY ? 'proxy' : 'local key') : 'MISSING'}, ElevenLabs: ${elevenOk ? (USE_API_PROXY ? 'proxy' : 'local key') : 'browser TTS'}, Supabase: ${ledgerOk ? 'yes' : 'MISSING'}, host: ${window.location.hostname}`,
   )
   if (ledgerOk) {
     void probeLedgerHealth()
   } else {
     console.warn('[Axerai] Ledger OFF — add VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY to .env and restart npm run dev.')
   }
-  if (import.meta.env.PROD && !geminiOk) {
-    console.warn(
-      '[Axerai] Production build me Gemini key nahi mili. Netlify → Environment variables → VITE_GEMINI_API_KEY, phir Trigger deploy.',
-    )
+  if (import.meta.env.PROD && USE_API_PROXY) {
+    console.info('[Axerai] API keys are server-side via Netlify Functions — not exposed in browser bundle.')
+  }
+  if (!USE_API_PROXY && !geminiOk) {
+    console.warn('[Axerai] Local dev — add VITE_GEMINI_API_KEY to .env or run netlify dev with GEMINI_API_KEY.')
   }
 }
 const GEMINI_VISION_ENABLED = false
@@ -1181,9 +1198,23 @@ function App() {
   }, [speakWithBrowserTts])
 
   const askGemini = useCallback(async (userPrompt, _imageDataUrl = null) => {
-    const parts = []
     const imagePart =
       GEMINI_VISION_ENABLED && _imageDataUrl ? parseDataUrl(_imageDataUrl) : null
+
+    if (USE_API_PROXY) {
+      return askGeminiViaProxy({
+        userPrompt,
+        systemInstruction: MYRA_SYSTEM_PROMPT,
+        models: GEMINI_MODELS,
+        imagePart,
+        generationConfig: {
+          temperature: 1.15,
+          topP: 0.95,
+        },
+      })
+    }
+
+    const parts = []
     if (imagePart) {
       parts.push({
         inlineData: {
@@ -1193,6 +1224,11 @@ function App() {
       })
     }
     parts.push({ text: userPrompt })
+
+    const client = await getGeminiClient()
+    if (!client) {
+      throw new Error('Gemini not configured — add VITE_GEMINI_API_KEY for local dev')
+    }
 
     let lastError = null
 
@@ -1209,7 +1245,7 @@ function App() {
 
       for (let attempt = 1; attempt <= GEMINI_RETRIES_PER_MODEL; attempt += 1) {
         try {
-          const model = genAI.getGenerativeModel({
+          const model = client.getGenerativeModel({
             model: modelName,
             systemInstruction: MYRA_SYSTEM_PROMPT,
             generationConfig: {
@@ -1327,7 +1363,7 @@ function App() {
 
   const sendMyraUserMessage = useCallback(
     async (userText, { cycleId, imageDataUrl } = {}) => {
-      if (!genAI) return
+      if (!isGeminiConfigured()) return
       const trimmed = String(userText).trim()
       const image = imageDataUrl || null
       if (!trimmed && !image) return
@@ -1443,11 +1479,11 @@ function App() {
       console.error('[Jarvis] Speech Recognition is not supported in this browser')
       return false
     }
-    if (!genAI) {
+    if (!isGeminiConfigured()) {
       console.error(
         import.meta.env.PROD
-          ? '[Jarvis] VITE_GEMINI_API_KEY Netlify build me missing — env vars set karke dubara deploy karo'
-          : '[Jarvis] VITE_GEMINI_API_KEY is missing — add it to your .env file',
+          ? '[Jarvis] Gemini proxy unavailable — Netlify me GEMINI_API_KEY set karke redeploy karo'
+          : '[Jarvis] Gemini missing — add VITE_GEMINI_API_KEY to .env for local dev',
       )
       return false
     }
@@ -2014,7 +2050,7 @@ function App() {
       })
     }
 
-    if (!genAI) {
+    if (!isGeminiConfigured()) {
       await finishWelcome(FALLBACK_WELCOME_SPEECH)
       return
     }

@@ -758,7 +758,10 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
   )
 }
 
+/** Ledger + backend always use this one code for the RICHERA product. */
 const VERIFICATION_CODE = 'R'
+/** OCR may read only part of the card — every fragment maps to VERIFICATION_CODE. */
+const RICHERA_SCAN_FRAGMENTS = ['RICHERA', 'RICH', 'RIC', 'RI', 'RA', 'CH']
 const FALLBACK_WELCOME_SPEECH =
   'Arrey finally! Lagta hai crystal ne mujhe jagaa diya. Main Myra hoon... Richira se aayi hoon tumse milne. Pehle ye batao, aaj ka scene kya hai?'
 
@@ -769,11 +772,12 @@ function compactOcrText(text) {
 }
 
 function matchBrandFromOcr(text) {
-  const raw = String(text ?? '').toUpperCase()
   const compact = compactOcrText(text)
-
   if (!compact) return null
-  if (compact === 'R' || /\bR\b/.test(raw)) return VERIFICATION_CODE
+
+  for (const fragment of RICHERA_SCAN_FRAGMENTS) {
+    if (compact.includes(fragment)) return VERIFICATION_CODE
+  }
 
   return null
 }

@@ -180,37 +180,15 @@ function applyMyraVoice(utterance, voiceRef) {
   }
 }
 
-function preloadIntroVideo(videoSrc, timeoutMs = 20000) {
-  return new Promise((resolve) => {
-    const video = document.createElement('video')
-    let settled = false
-
-    const finish = () => {
-      if (settled) return
-      settled = true
-      video.removeAttribute('src')
-      video.load()
-      resolve()
-    }
-
-    const onReady = () => finish()
-    const onError = () => finish()
-
-    video.preload = 'auto'
-    video.muted = true
-    video.playsInline = true
-    video.addEventListener('canplaythrough', onReady, { once: true })
-    video.addEventListener('error', onError, { once: true })
-    video.src = videoSrc
-    video.load()
-
-    window.setTimeout(finish, timeoutMs)
-  })
-}
-
-function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
+function IntroLoadingScreen({ videoReady, onReady, handoff }) {
   const [minDone, setMinDone] = useState(false)
   const [progress, setProgress] = useState(0)
+  const readyFiredRef = useRef(false)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setMinDone(true), INTRO_LOADING_MIN_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -219,30 +197,31 @@ function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
     const animateProgress = () => {
       if (cancelled) return
       const elapsed = performance.now() - startedAt
-      const pct = Math.min(100, (elapsed / INTRO_LOADING_MIN_MS) * 100)
-      setProgress(pct)
-      if (pct < 100) requestAnimationFrame(animateProgress)
+      const timePct = Math.min(92, (elapsed / INTRO_LOADING_MIN_MS) * 92)
+      if (minDone && videoReady) {
+        setProgress(100)
+        return
+      }
+      if (videoReady) {
+        setProgress(Math.max(timePct, 95))
+      } else {
+        setProgress(timePct)
+      }
+      requestAnimationFrame(animateProgress)
     }
 
     requestAnimationFrame(animateProgress)
-
-    Promise.all([preloadIntroVideo(videoSrc, 30000), new Promise((r) => window.setTimeout(r, INTRO_LOADING_MIN_MS))]).then(
-      () => {
-        if (!cancelled) {
-          setProgress(100)
-          setMinDone(true)
-        }
-      },
-    )
-
     return () => {
       cancelled = true
     }
-  }, [videoSrc])
+  }, [videoReady, minDone])
 
   useEffect(() => {
-    if (minDone) onReady?.()
-  }, [minDone, onReady])
+    if (!minDone || !videoReady || readyFiredRef.current) return undefined
+    readyFiredRef.current = true
+    const timer = window.setTimeout(() => onReady?.(), 420)
+    return () => window.clearTimeout(timer)
+  }, [minDone, videoReady, onReady])
 
   return (
     <div
@@ -251,11 +230,9 @@ function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
       aria-live="polite"
       aria-label="Loading Richera experience"
     >
-      {handoff ? <div className="intro-handoff-flash" aria-hidden /> : null}
       <div className="intro-loading__stage">
         <img src={INTRO_LOADING_BG} alt="" className="intro-loading__bg" aria-hidden />
         <div className="intro-loading__shade" aria-hidden />
-        <div className="intro-loading__glow" aria-hidden />
         <div className="intro-loading__content">
           <h1 className="intro-loading__brand">Richera</h1>
           <p className="intro-loading__credit">powered by axerai</p>
@@ -276,14 +253,67 @@ function IntroOverlay({
   visible = false,
   active = false,
   handoffIn = false,
-  gestureReady = false,
   onVideoReady,
 }) {
   const videoRef = useRef(null)
   const exitingRef = useRef(false)
   const readyNotifiedRef = useRef(false)
   const [exiting, setExiting] = useState(false)
-  const [needsSoundTap, setNeedsSoundTap] = useState(false)
+  const [exitFrameSrc, setExitFrameSrc] = useState(null)
+
+  const captureVideoFrame = useCallback(() => {
+    const video = videoRef.current
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return false
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return false
+
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      setExitFrameSrc(canvas.toDataURL('image/jpeg', 0.92))
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  const beginExit = useCallback(
+    (lockLastFrame = false) => {
+      if (exitingRef.current) return
+      exitingRef.current = true
+
+      const video = videoRef.current
+      if (lockLastFrame && video) captureVideoFrame()
+      if (video) video.pause()
+
+      setExiting(true)
+      onExitStart?.()
+      window.setTimeout(() => onExitComplete?.(), 1450)
+    },
+    [captureVideoFrame, onExitStart, onExitComplete],
+  )
+
+  const handleVideoEnded = useCallback(() => {
+    const video = videoRef.current
+    if (!video) {
+      beginExit(true)
+      return
+    }
+
+    const finish = () => beginExit(true)
+
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      const target = Math.max(0, video.duration - 0.034)
+      video.addEventListener('seeked', finish, { once: true })
+      video.currentTime = target
+      return
+    }
+
+    finish()
+  }, [beginExit])
 
   useEffect(() => {
     const video = videoRef.current
@@ -303,16 +333,22 @@ function IntroOverlay({
     video.setAttribute('playsinline', '')
     video.setAttribute('webkit-playsinline', '')
 
-    const onCanPlay = () => notifyReady()
-
-    if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    const onCanPlay = () => {
+      window.clearTimeout(failTimer)
       notifyReady()
+    }
+
+    const failTimer = window.setTimeout(onCanPlay, 45000)
+
+    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+      onCanPlay()
     } else {
       video.addEventListener('canplaythrough', onCanPlay, { once: true })
       video.addEventListener('canplay', onCanPlay, { once: true })
     }
 
     return () => {
+      window.clearTimeout(failTimer)
       video.removeEventListener('canplaythrough', onCanPlay)
       video.removeEventListener('canplay', onCanPlay)
     }
@@ -320,39 +356,19 @@ function IntroOverlay({
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video) return undefined
-
-    if (!visible) {
-      video.pause()
-      video.currentTime = 0
-      return undefined
-    }
+    if (!video || active) return undefined
 
     video.pause()
     video.currentTime = 0
+    video.muted = true
     return undefined
-  }, [visible])
+  }, [active])
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video || !active) return undefined
+    if (!video || !active || !visible) return undefined
 
     let cancelled = false
-
-    const unlockSound = () => {
-      if (cancelled || !videoRef.current) return
-      const v = videoRef.current
-      v.muted = false
-      v.volume = 1
-      v.play().catch(() => {})
-      setNeedsSoundTap(false)
-      primeMobileAudio()
-    }
-
-    const waitForPaint = () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(resolve))
-      })
 
     const waitForCanPlay = () =>
       new Promise((resolve) => {
@@ -363,103 +379,50 @@ function IntroOverlay({
         const onReady = () => resolve()
         video.addEventListener('canplay', onReady, { once: true })
         video.addEventListener('loadeddata', onReady, { once: true })
-        window.setTimeout(resolve, 2500)
+        window.setTimeout(resolve, 10000)
       })
-
-    const tryMutedPlay = async (attempts = 4) => {
-      for (let i = 0; i < attempts; i += 1) {
-        if (cancelled) return false
-        video.pause()
-        video.currentTime = 0
-        video.muted = true
-        video.defaultMuted = true
-        video.playsInline = true
-        video.setAttribute('playsinline', '')
-        video.setAttribute('webkit-playsinline', '')
-        try {
-          await video.play()
-          if (!video.paused) return true
-        } catch {
-          // retry after paint / short delay
-        }
-        await waitForPaint()
-        await new Promise((resolve) => window.setTimeout(resolve, 120 * (i + 1)))
-      }
-      return false
-    }
 
     const startPlayback = async () => {
       await waitForCanPlay()
       if (cancelled) return
-      await waitForPaint()
-      if (cancelled) return
 
-      if (gestureReady) {
-        video.muted = false
-        video.volume = 1
-        try {
-          await video.play()
-          if (!cancelled && !video.paused) {
-            setNeedsSoundTap(false)
-            return
-          }
-        } catch {
-          // fall back to muted autoplay below
-        }
-      }
-
-      const playing = await tryMutedPlay()
-      if (cancelled) return
-      if (!playing) {
-        setNeedsSoundTap(true)
-        return
-      }
-
-      video.muted = false
-      video.volume = 1
-      video.play().then(() => {
-        if (!cancelled) setNeedsSoundTap(false)
-      }).catch(() => {
-        if (!cancelled) setNeedsSoundTap(true)
-      })
-    }
-
-    startPlayback()
-    document.addEventListener('touchstart', unlockSound, { once: true, passive: true })
-    document.addEventListener('click', unlockSound, { once: true })
-
-    return () => {
-      cancelled = true
-      document.removeEventListener('touchstart', unlockSound)
-      document.removeEventListener('click', unlockSound)
-    }
-  }, [active, gestureReady])
-
-  useEffect(() => {
-    if (!needsSoundTap || !visible || !active) return undefined
-
-    const autoPlay = () => {
-      const video = videoRef.current
-      if (!video) return
+      video.pause()
+      video.currentTime = 0
+      video.playsInline = true
+      video.setAttribute('playsinline', '')
+      video.setAttribute('webkit-playsinline', '')
       primeMobileAudio()
       video.muted = false
       video.volume = 1
-      video.play().catch(() => {})
-      setNeedsSoundTap(false)
+
+      try {
+        await video.play()
+        if (!cancelled && !video.paused) return
+      } catch {
+        // fall through to muted retry
+      }
+
+      if (cancelled) return
+      video.muted = true
+      try {
+        await video.play()
+        if (cancelled || video.paused) return
+        video.muted = false
+        video.volume = 1
+        await video.play().catch(() => {
+          video.muted = true
+        })
+      } catch {
+        // best effort — video visible even if autoplay blocked
+      }
     }
 
-    const timer = window.setTimeout(autoPlay, 150)
-    return () => window.clearTimeout(timer)
-  }, [needsSoundTap, visible, active])
+    startPlayback()
 
-  const beginExit = useCallback(() => {
-    if (exitingRef.current) return
-    exitingRef.current = true
-    setExiting(true)
-    videoRef.current?.pause()
-    onExitStart?.()
-    window.setTimeout(() => onExitComplete?.(), 1450)
-  }, [onExitStart, onExitComplete])
+    return () => {
+      cancelled = true
+    }
+  }, [active, visible])
 
   return (
     <div className={`intro-overlay${exiting ? ' intro-overlay--exit' : ''}${visible ? ' intro-overlay--active' : ' intro-overlay--preparing'}${handoffIn ? ' intro-overlay--handoff-in' : ''}`}>
@@ -467,18 +430,21 @@ function IntroOverlay({
       <div className="intro-overlay__vignette" aria-hidden />
       <div className="intro-scan-beam" aria-hidden />
       <div className="intro-flash" aria-hidden />
+      {exitFrameSrc ? (
+        <img src={exitFrameSrc} alt="" className="intro-overlay__video" aria-hidden />
+      ) : null}
       <video
         ref={videoRef}
         src={INTRO_VIDEO_PATH}
-        className="intro-overlay__video"
+        className={`intro-overlay__video${exitFrameSrc ? ' intro-overlay__video--hidden' : ''}`}
         playsInline
         muted
         preload="auto"
-        onEnded={beginExit}
+        onEnded={handleVideoEnded}
       />
       <button
         type="button"
-        onClick={beginExit}
+        onClick={() => beginExit(false)}
         disabled={exiting || !visible}
         className="intro-overlay__skip"
       >
@@ -489,57 +455,39 @@ function IntroOverlay({
 }
 
 function IntroShell({ onExitStart, onExitComplete }) {
-  const [loadingMinDone, setLoadingMinDone] = useState(false)
   const [videoReady, setVideoReady] = useState(false)
-  const [userStarted, setUserStarted] = useState(false)
+  const [loadingComplete, setLoadingComplete] = useState(false)
   const [handoff, setHandoff] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
-  const [playVideo, setPlayVideo] = useState(false)
   const [loadingVisible, setLoadingVisible] = useState(true)
 
-  const canBegin = loadingMinDone && videoReady
-
   useEffect(() => {
-    primeMobileAudio()
-  }, [])
-
-  useEffect(() => {
-    if (!canBegin || userStarted) return undefined
-    primeMobileAudio()
-    const timer = window.setTimeout(() => setUserStarted(true), 220)
-    return () => window.clearTimeout(timer)
-  }, [canBegin, userStarted])
-
-  useEffect(() => {
-    if (!canBegin || !userStarted) return undefined
+    if (!loadingComplete) return undefined
     setHandoff(true)
-    const videoTimer = window.setTimeout(() => setShowVideo(true), 320)
-    const playTimer = window.setTimeout(() => {
+
+    const revealTimer = window.setTimeout(() => {
+      setShowVideo(true)
       setLoadingVisible(false)
-      setPlayVideo(true)
-    }, 1200)
-    return () => {
-      window.clearTimeout(videoTimer)
-      window.clearTimeout(playTimer)
-    }
-  }, [canBegin, userStarted])
+    }, 900)
+
+    return () => window.clearTimeout(revealTimer)
+  }, [loadingComplete])
 
   return (
     <div className="intro-shell">
       <IntroOverlay
         visible={showVideo}
-        active={playVideo}
+        active={showVideo}
         handoffIn={handoff}
-        gestureReady={userStarted}
         onVideoReady={() => setVideoReady(true)}
         onExitStart={onExitStart}
         onExitComplete={onExitComplete}
       />
       {loadingVisible ? (
         <IntroLoadingScreen
-          videoSrc={INTRO_VIDEO_PATH}
+          videoReady={videoReady}
           handoff={handoff}
-          onReady={() => setLoadingMinDone(true)}
+          onReady={() => setLoadingComplete(true)}
         />
       ) : null}
     </div>

@@ -521,25 +521,6 @@ body {
   animation: intro-loading-ui-out 0.5s ease forwards;
 }
 
-.intro-handoff-flash {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  opacity: 0;
-  background: radial-gradient(
-    circle at 50% 38%,
-    rgba(255, 248, 220, 0.42),
-    rgba(245, 201, 138, 0.2) 40%,
-    rgba(180, 210, 160, 0.08) 54%,
-    transparent 68%
-  );
-  pointer-events: none;
-}
-
-.intro-loading--handoff .intro-handoff-flash {
-  animation: intro-flash 0.75s ease-out forwards;
-}
-
 @keyframes intro-loading-ui-out {
   to {
     opacity: 0;
@@ -575,29 +556,10 @@ body {
   inset: 0;
   background: linear-gradient(
     180deg,
-    rgba(18, 32, 22, 0.08) 0%,
-    rgba(12, 24, 16, 0.18) 45%,
-    rgba(8, 16, 12, 0.62) 100%
+    rgba(18, 32, 22, 0.04) 0%,
+    rgba(12, 24, 16, 0.12) 50%,
+    rgba(8, 16, 12, 0.5) 100%
   );
-  pointer-events: none;
-}
-
-.intro-loading__glow {
-  position: absolute;
-  left: 50%;
-  top: 38%;
-  width: min(52vw, 220px);
-  height: min(52vw, 220px);
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    rgba(255, 248, 220, 0.42) 0%,
-    rgba(248, 181, 160, 0.28) 28%,
-    rgba(235, 198, 110, 0.14) 52%,
-    transparent 72%
-  );
-  animation: intro-loading-heart-pulse 2.4s ease-in-out infinite;
   pointer-events: none;
 }
 
@@ -691,7 +653,6 @@ body {
   width: 0%;
   border-radius: inherit;
   background: linear-gradient(90deg, #f2b8c6 0%, #f5d78e 52%, #e8c96a 100%);
-  box-shadow: 0 0 12px rgba(245, 215, 142, 0.55);
   transition: width 0.1s linear;
 }
 
@@ -699,11 +660,6 @@ body {
   width: 100%;
   animation: none;
   transition: width 0.48s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.intro-loading--complete .intro-loading__glow {
-  animation: none;
-  opacity: 0.72;
 }
 
 @keyframes intro-loading-bar-slide {
@@ -718,18 +674,6 @@ body {
   100% {
     left: 82%;
     width: 18%;
-  }
-}
-
-@keyframes intro-loading-heart-pulse {
-  0%,
-  100% {
-    transform: translate(-50%, -50%) scale(0.92);
-    opacity: 0.5;
-  }
-  50% {
-    transform: translate(-50%, -50%) scale(1.05);
-    opacity: 0.85;
   }
 }
 
@@ -820,6 +764,13 @@ body {
   object-fit: contain;
   object-position: center;
   background: #000;
+}
+
+.intro-overlay__video--hidden {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .intro-overlay__skip {
@@ -1016,7 +967,6 @@ body {
   .intro-overlay--exit .intro-flash,
   .intro-overlay--exit,
   .intro-loading--handoff .intro-loading__stage,
-  .intro-loading--handoff .intro-handoff-flash,
   .intro-overlay--handoff-in .intro-overlay__video,
   .main-reveal--active .main-reveal-item--1,
   .main-reveal--active .main-reveal-item--2,

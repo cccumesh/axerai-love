@@ -191,13 +191,14 @@ function preloadIntroVideo(videoSrc, timeoutMs = 20000) {
   })
 }
 
-function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
+function IntroLoadingScreen({ videoSrc, onReady, handoff, canBegin = false, onBegin }) {
   const [minDone, setMinDone] = useState(false)
+  const beganRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
 
-    Promise.all([preloadIntroVideo(videoSrc), new Promise((r) => window.setTimeout(r, INTRO_LOADING_MIN_MS))]).then(
+    Promise.all([preloadIntroVideo(videoSrc, 30000), new Promise((r) => window.setTimeout(r, INTRO_LOADING_MIN_MS))]).then(
       () => {
         if (!cancelled) setMinDone(true)
       },
@@ -212,12 +213,21 @@ function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
     if (minDone) onReady?.()
   }, [minDone, onReady])
 
+  const handleBegin = () => {
+    if (!canBegin || beganRef.current) return
+    beganRef.current = true
+    primeMobileAudio()
+    onBegin?.()
+  }
+
   return (
     <div
-      className={`intro-loading${handoff ? ' intro-loading--handoff' : ''}`}
-      role="status"
+      className={`intro-loading${handoff ? ' intro-loading--handoff' : ''}${canBegin ? ' intro-loading--can-begin' : ''}`}
+      role={canBegin ? 'button' : 'status'}
       aria-live="polite"
-      aria-label="Loading Richera experience"
+      aria-label={canBegin ? 'Tap anywhere to begin Richera experience' : 'Loading Richera experience'}
+      onClick={canBegin ? handleBegin : undefined}
+      onTouchStart={canBegin ? handleBegin : undefined}
     >
       {handoff ? <div className="intro-handoff-flash" aria-hidden /> : null}
       <div className="intro-loading__stage">
@@ -232,13 +242,22 @@ function IntroLoadingScreen({ videoSrc, onReady, handoff }) {
               <div className="intro-loading__bar-fill" />
             </div>
           </div>
+          {canBegin ? <p className="intro-loading__tap-hint">Tap anywhere to begin</p> : null}
         </div>
       </div>
     </div>
   )
 }
 
-function IntroOverlay({ onExitStart, onExitComplete, visible = false, active = false, handoffIn = false, onVideoReady }) {
+function IntroOverlay({
+  onExitStart,
+  onExitComplete,
+  visible = false,
+  active = false,
+  handoffIn = false,
+  gestureReady = false,
+  onVideoReady,
+}) {
   const videoRef = useRef(null)
   const exitingRef = useRef(false)
   const readyNotifiedRef = useRef(false)
@@ -354,6 +373,20 @@ function IntroOverlay({ onExitStart, onExitComplete, visible = false, active = f
       await waitForPaint()
       if (cancelled) return
 
+      if (gestureReady) {
+        video.muted = false
+        video.volume = 1
+        try {
+          await video.play()
+          if (!cancelled && !video.paused) {
+            setNeedsSoundTap(false)
+            return
+          }
+        } catch {
+          // fall back to muted autoplay below
+        }
+      }
+
       const playing = await tryMutedPlay()
       if (cancelled) return
       if (!playing) {
@@ -379,7 +412,7 @@ function IntroOverlay({ onExitStart, onExitComplete, visible = false, active = f
       document.removeEventListener('touchstart', unlockSound)
       document.removeEventListener('click', unlockSound)
     }
-  }, [active])
+  }, [active, gestureReady])
 
   const beginExit = useCallback(() => {
     if (exitingRef.current) return
@@ -415,7 +448,7 @@ function IntroOverlay({ onExitStart, onExitComplete, visible = false, active = f
           setNeedsSoundTap(false)
           primeMobileAudio()
         }}>
-          Tap for sound
+          Tap to play
         </button>
       ) : null}
       <button
@@ -433,10 +466,13 @@ function IntroOverlay({ onExitStart, onExitComplete, visible = false, active = f
 function IntroShell({ onExitStart, onExitComplete }) {
   const [loadingMinDone, setLoadingMinDone] = useState(false)
   const [videoReady, setVideoReady] = useState(false)
+  const [userStarted, setUserStarted] = useState(false)
   const [handoff, setHandoff] = useState(false)
   const [showVideo, setShowVideo] = useState(false)
   const [playVideo, setPlayVideo] = useState(false)
   const [loadingVisible, setLoadingVisible] = useState(true)
+
+  const canBegin = loadingMinDone && videoReady
 
   useEffect(() => {
     const prime = () => primeMobileAudio()
@@ -449,7 +485,7 @@ function IntroShell({ onExitStart, onExitComplete }) {
   }, [])
 
   useEffect(() => {
-    if (!loadingMinDone || !videoReady) return undefined
+    if (!canBegin || !userStarted) return undefined
     setHandoff(true)
     const videoTimer = window.setTimeout(() => setShowVideo(true), 320)
     const playTimer = window.setTimeout(() => {
@@ -460,7 +496,7 @@ function IntroShell({ onExitStart, onExitComplete }) {
       window.clearTimeout(videoTimer)
       window.clearTimeout(playTimer)
     }
-  }, [loadingMinDone, videoReady])
+  }, [canBegin, userStarted])
 
   return (
     <div className="intro-shell">
@@ -468,6 +504,7 @@ function IntroShell({ onExitStart, onExitComplete }) {
         visible={showVideo}
         active={playVideo}
         handoffIn={handoff}
+        gestureReady={userStarted}
         onVideoReady={() => setVideoReady(true)}
         onExitStart={onExitStart}
         onExitComplete={onExitComplete}
@@ -476,6 +513,8 @@ function IntroShell({ onExitStart, onExitComplete }) {
         <IntroLoadingScreen
           videoSrc={INTRO_VIDEO_PATH}
           handoff={handoff}
+          canBegin={canBegin}
+          onBegin={() => setUserStarted(true)}
           onReady={() => setLoadingMinDone(true)}
         />
       ) : null}

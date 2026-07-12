@@ -639,6 +639,30 @@ body {
   text-shadow: 0 1px 5px rgba(0, 0, 0, 0.65);
 }
 
+.intro-loading--can-begin {
+  cursor: pointer;
+}
+
+.intro-loading__tap-hint {
+  margin: 1.1rem 0 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.65);
+  animation: intro-loading-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes intro-loading-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .intro-loading__bar {
   width: min(78vw, 280px);
   margin-top: 0.35rem;

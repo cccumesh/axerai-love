@@ -105,7 +105,7 @@ export default async (request) => {
     return jsonResponse({ error: 'Method not allowed' }, 405)
   }
 
-  const apiKey = String(process.env.GEMINI_API_KEY ?? '').trim()
+  const apiKey = String(process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? '').trim()
   if (!apiKey) {
     return jsonResponse({ error: 'GEMINI_API_KEY missing on server' }, 500)
   }

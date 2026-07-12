@@ -5,8 +5,10 @@ export default async (request) => {
     return new Response('Method not allowed', { status: 405 })
   }
 
-  const apiKey = String(process.env.ELEVENLABS_API_KEY ?? '').trim()
-  const defaultVoiceId = String(process.env.ELEVENLABS_VOICE_ID ?? '').trim()
+  const apiKey = String(process.env.ELEVENLABS_API_KEY ?? process.env.VITE_ELEVENLABS_API_KEY ?? '').trim()
+  const defaultVoiceId = String(
+    process.env.ELEVENLABS_VOICE_ID ?? process.env.VITE_ELEVENLABS_VOICE_ID ?? '',
+  ).trim()
 
   if (!apiKey) {
     return new Response(JSON.stringify({ error: 'ELEVENLABS_API_KEY missing on server' }), {

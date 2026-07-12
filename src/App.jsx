@@ -78,7 +78,6 @@ const GEMINI_VISION_ENABLED = false
 const GEMINI_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite']
 const GEMINI_RETRIES_PER_MODEL = 1
 const MINDAR_TARGET = '/targets.mind'
-const INTRO_VIDEO_PATH = '/videos/intro.mp4'
 const INTRO_LOADING_BG = '/images/richera-loading.png'
 const INTRO_LOADING_MIN_MS = 3000
 /** Roman Hinglish transcript — hi-IN returns Devanagari (अ आ) on most phones */
@@ -180,15 +179,9 @@ function applyMyraVoice(utterance, voiceRef) {
   }
 }
 
-function IntroLoadingScreen({ videoReady, onReady, handoff }) {
-  const [minDone, setMinDone] = useState(false)
+function IntroLoadingScreen({ onReady, handoff }) {
   const [progress, setProgress] = useState(0)
   const readyFiredRef = useRef(false)
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setMinDone(true), INTRO_LOADING_MIN_MS)
-    return () => window.clearTimeout(timer)
-  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -197,31 +190,21 @@ function IntroLoadingScreen({ videoReady, onReady, handoff }) {
     const animateProgress = () => {
       if (cancelled) return
       const elapsed = performance.now() - startedAt
-      const timePct = Math.min(92, (elapsed / INTRO_LOADING_MIN_MS) * 92)
-      if (minDone && videoReady) {
-        setProgress(100)
-        return
+      const pct = Math.min(100, (elapsed / INTRO_LOADING_MIN_MS) * 100)
+      setProgress(pct)
+      if (pct < 100) {
+        requestAnimationFrame(animateProgress)
+      } else if (!readyFiredRef.current) {
+        readyFiredRef.current = true
+        window.setTimeout(() => onReady?.(), 420)
       }
-      if (videoReady) {
-        setProgress(Math.max(timePct, 95))
-      } else {
-        setProgress(timePct)
-      }
-      requestAnimationFrame(animateProgress)
     }
 
     requestAnimationFrame(animateProgress)
     return () => {
       cancelled = true
     }
-  }, [videoReady, minDone])
-
-  useEffect(() => {
-    if (!minDone || !videoReady || readyFiredRef.current) return undefined
-    readyFiredRef.current = true
-    const timer = window.setTimeout(() => onReady?.(), 420)
-    return () => window.clearTimeout(timer)
-  }, [minDone, videoReady, onReady])
+  }, [onReady])
 
   return (
     <div
@@ -247,249 +230,18 @@ function IntroLoadingScreen({ videoReady, onReady, handoff }) {
   )
 }
 
-function IntroOverlay({
-  onExitStart,
-  onExitComplete,
-  visible = false,
-  active = false,
-  handoffIn = false,
-  onVideoReady,
-}) {
-  const videoRef = useRef(null)
-  const exitingRef = useRef(false)
-  const readyNotifiedRef = useRef(false)
-  const [exiting, setExiting] = useState(false)
-  const [exitFrameSrc, setExitFrameSrc] = useState(null)
-
-  const captureVideoFrame = useCallback(() => {
-    const video = videoRef.current
-    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return false
-
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return false
-
-    try {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      setExitFrameSrc(canvas.toDataURL('image/jpeg', 0.92))
-      return true
-    } catch {
-      return false
-    }
-  }, [])
-
-  const beginExit = useCallback(
-    (lockLastFrame = false) => {
-      if (exitingRef.current) return
-      exitingRef.current = true
-
-      const video = videoRef.current
-      if (lockLastFrame && video) captureVideoFrame()
-      if (video) video.pause()
-
-      setExiting(true)
-      onExitStart?.()
-      window.setTimeout(() => onExitComplete?.(), 1450)
-    },
-    [captureVideoFrame, onExitStart, onExitComplete],
-  )
-
-  const handleVideoEnded = useCallback(() => {
-    const video = videoRef.current
-    if (!video) {
-      beginExit(true)
-      return
-    }
-
-    const finish = () => beginExit(true)
-
-    if (Number.isFinite(video.duration) && video.duration > 0) {
-      const target = Math.max(0, video.duration - 0.034)
-      video.addEventListener('seeked', finish, { once: true })
-      video.currentTime = target
-      return
-    }
-
-    finish()
-  }, [beginExit])
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return undefined
-
-    const notifyReady = () => {
-      if (readyNotifiedRef.current) return
-      readyNotifiedRef.current = true
-      onVideoReady?.()
-    }
-
-    video.pause()
-    video.currentTime = 0
-    video.muted = true
-    video.defaultMuted = true
-    video.playsInline = true
-    video.setAttribute('playsinline', '')
-    video.setAttribute('webkit-playsinline', '')
-
-    const onCanPlay = () => {
-      window.clearTimeout(failTimer)
-      notifyReady()
-    }
-
-    const failTimer = window.setTimeout(onCanPlay, 45000)
-
-    if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-      onCanPlay()
-    } else {
-      video.addEventListener('canplaythrough', onCanPlay, { once: true })
-      video.addEventListener('canplay', onCanPlay, { once: true })
-    }
-
-    return () => {
-      window.clearTimeout(failTimer)
-      video.removeEventListener('canplaythrough', onCanPlay)
-      video.removeEventListener('canplay', onCanPlay)
-    }
-  }, [onVideoReady])
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || active) return undefined
-
-    video.pause()
-    video.currentTime = 0
-    video.muted = true
-    return undefined
-  }, [active])
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || !active || !visible) return undefined
-
-    let cancelled = false
-
-    const waitForCanPlay = () =>
-      new Promise((resolve) => {
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          resolve()
-          return
-        }
-        const onReady = () => resolve()
-        video.addEventListener('canplay', onReady, { once: true })
-        video.addEventListener('loadeddata', onReady, { once: true })
-        window.setTimeout(resolve, 10000)
-      })
-
-    const startPlayback = async () => {
-      await waitForCanPlay()
-      if (cancelled) return
-
-      video.pause()
-      video.currentTime = 0
-      video.playsInline = true
-      video.setAttribute('playsinline', '')
-      video.setAttribute('webkit-playsinline', '')
-      primeMobileAudio()
-      video.muted = false
-      video.volume = 1
-
-      try {
-        await video.play()
-        if (!cancelled && !video.paused) return
-      } catch {
-        // fall through to muted retry
-      }
-
-      if (cancelled) return
-      video.muted = true
-      try {
-        await video.play()
-        if (cancelled || video.paused) return
-        video.muted = false
-        video.volume = 1
-        await video.play().catch(() => {
-          video.muted = true
-        })
-      } catch {
-        // best effort — video visible even if autoplay blocked
-      }
-    }
-
-    startPlayback()
-
-    return () => {
-      cancelled = true
-    }
-  }, [active, visible])
-
-  return (
-    <div className={`intro-overlay${exiting ? ' intro-overlay--exit' : ''}${visible ? ' intro-overlay--active' : ' intro-overlay--preparing'}${handoffIn ? ' intro-overlay--handoff-in' : ''}`}>
-      <div className="intro-overlay__grid" aria-hidden />
-      <div className="intro-overlay__vignette" aria-hidden />
-      <div className="intro-scan-beam" aria-hidden />
-      <div className="intro-flash" aria-hidden />
-      {exitFrameSrc ? (
-        <img src={exitFrameSrc} alt="" className="intro-overlay__video" aria-hidden />
-      ) : null}
-      <video
-        ref={videoRef}
-        src={INTRO_VIDEO_PATH}
-        className={`intro-overlay__video${exitFrameSrc ? ' intro-overlay__video--hidden' : ''}`}
-        playsInline
-        muted
-        preload="auto"
-        onEnded={handleVideoEnded}
-      />
-      <button
-        type="button"
-        onClick={() => beginExit(false)}
-        disabled={exiting || !visible}
-        className="intro-overlay__skip"
-      >
-        Skip
-      </button>
-    </div>
-  )
-}
-
 function IntroShell({ onExitStart, onExitComplete }) {
-  const [videoReady, setVideoReady] = useState(false)
-  const [loadingComplete, setLoadingComplete] = useState(false)
   const [handoff, setHandoff] = useState(false)
-  const [showVideo, setShowVideo] = useState(false)
-  const [loadingVisible, setLoadingVisible] = useState(true)
 
-  useEffect(() => {
-    if (!loadingComplete) return undefined
+  const handleLoadingComplete = useCallback(() => {
     setHandoff(true)
-
-    const revealTimer = window.setTimeout(() => {
-      setShowVideo(true)
-      setLoadingVisible(false)
-    }, 900)
-
-    return () => window.clearTimeout(revealTimer)
-  }, [loadingComplete])
+    onExitStart?.()
+    window.setTimeout(() => onExitComplete?.(), 900)
+  }, [onExitStart, onExitComplete])
 
   return (
     <div className="intro-shell">
-      <IntroOverlay
-        visible={showVideo}
-        active={showVideo}
-        handoffIn={handoff}
-        onVideoReady={() => setVideoReady(true)}
-        onExitStart={onExitStart}
-        onExitComplete={onExitComplete}
-      />
-      {loadingVisible ? (
-        <IntroLoadingScreen
-          videoReady={videoReady}
-          handoff={handoff}
-          onReady={() => setLoadingComplete(true)}
-        />
-      ) : null}
+      <IntroLoadingScreen handoff={handoff} onReady={handleLoadingComplete} />
     </div>
   )
 }
@@ -2601,8 +2353,8 @@ function App() {
               </div>
 
               {isScanning && (
-                <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/45">
-                  <div className="rounded-2xl border border-white/15 bg-black/55 px-5 py-3 text-sm font-medium text-white/90 backdrop-blur-md">
+                <div className="hud-scan-status absolute inset-0 z-30 flex items-center justify-center">
+                  <div className="hud-scan-status__card rounded-2xl px-5 py-3 text-sm font-medium backdrop-blur-md">
                     Verifying…
                   </div>
                 </div>
@@ -2629,7 +2381,7 @@ function App() {
                 >
                   <span className="hud-scan-btn__bg" aria-hidden />
                   <span className="hud-scan-btn__shine" aria-hidden />
-                  <span className="relative flex items-center justify-center gap-2 px-6 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white">
+                  <span className="hud-scan-btn__label relative flex items-center justify-center gap-2 px-6 py-3 text-sm font-bold uppercase tracking-[0.14em]">
                     <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2" />
                       <circle cx="12" cy="12" r="3" />

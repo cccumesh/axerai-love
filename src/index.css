@@ -14,7 +14,7 @@ body,
 }
 
 body {
-  background: #05050c;
+  background: #080f0a;
 }
 
 .axerai-app {
@@ -89,18 +89,18 @@ body {
 
 .axerai-bg {
   background:
-    radial-gradient(ellipse 90% 55% at 50% -15%, rgba(168, 85, 247, 0.42), transparent),
-    radial-gradient(ellipse 55% 45% at 100% 40%, rgba(99, 102, 241, 0.28), transparent),
-    radial-gradient(ellipse 45% 35% at 0% 85%, rgba(236, 72, 153, 0.2), transparent),
-    radial-gradient(ellipse 40% 30% at 50% 100%, rgba(6, 182, 212, 0.08), transparent),
-    linear-gradient(180deg, #05050c 0%, #0a0812 45%, #06060e 100%);
+    radial-gradient(ellipse 90% 55% at 50% -15%, rgba(245, 201, 138, 0.3), transparent),
+    radial-gradient(ellipse 55% 45% at 100% 40%, rgba(242, 184, 198, 0.2), transparent),
+    radial-gradient(ellipse 45% 35% at 0% 85%, rgba(232, 201, 106, 0.16), transparent),
+    radial-gradient(ellipse 40% 30% at 50% 100%, rgba(18, 40, 28, 0.45), transparent),
+    linear-gradient(180deg, #080f0a 0%, #0c1410 45%, #060a08 100%);
 }
 
 .axerai-grid {
-  opacity: 0.45;
+  opacity: 0.38;
   background-image:
-    linear-gradient(rgba(168, 85, 247, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(168, 85, 247, 0.07) 1px, transparent 1px);
+    linear-gradient(rgba(245, 215, 142, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 215, 142, 0.07) 1px, transparent 1px);
   background-size: 28px 28px;
   mask-image: radial-gradient(ellipse at center, black 15%, transparent 78%);
 }
@@ -117,7 +117,7 @@ body {
   left: -8%;
   width: 220px;
   height: 220px;
-  background: rgba(168, 85, 247, 0.35);
+  background: rgba(245, 201, 138, 0.28);
 }
 
 .axerai-orb--2 {
@@ -125,7 +125,7 @@ body {
   bottom: 12%;
   width: 180px;
   height: 180px;
-  background: rgba(99, 102, 241, 0.3);
+  background: rgba(242, 184, 198, 0.24);
   animation-delay: -3s;
 }
 
@@ -151,21 +151,21 @@ body {
   }
 }
 
-/* --- HUD main UI --- */
+/* --- HUD main UI (Richera cream / gold / pink palette) --- */
 .hud-title {
-  text-shadow: 0 0 40px rgba(192, 132, 252, 0.35);
+  text-shadow: 0 0 40px rgba(245, 201, 138, 0.35);
 }
 
 .hud-eyebrow {
-  text-shadow: 0 0 20px rgba(232, 121, 249, 0.4);
+  text-shadow: 0 0 20px rgba(242, 184, 198, 0.4);
 }
 
 .hud-live-badge {
-  border: 1px solid rgba(52, 211, 153, 0.35);
-  background: rgba(6, 78, 59, 0.25);
+  border: 1px solid rgba(232, 201, 106, 0.4);
+  background: rgba(28, 36, 22, 0.45);
   box-shadow:
-    0 0 20px rgba(52, 211, 153, 0.15),
-    inset 0 0 12px rgba(52, 211, 153, 0.08);
+    0 0 20px rgba(245, 201, 138, 0.12),
+    inset 0 0 12px rgba(245, 215, 142, 0.08);
   backdrop-filter: blur(10px);
 }
 
@@ -173,8 +173,8 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #34d399;
-  box-shadow: 0 0 10px #34d399;
+  background: #e8c96a;
+  box-shadow: 0 0 10px #f5d78e;
   animation: live-pulse 1.8s ease-in-out infinite;
 }
 
@@ -191,23 +191,23 @@ body {
 }
 
 .hud-icon-btn {
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.45);
-  color: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 0 20px rgba(168, 85, 247, 0.12);
+  border: 1px solid rgba(245, 215, 142, 0.28);
+  background: rgba(12, 20, 14, 0.55);
+  color: rgba(255, 244, 220, 0.92);
+  box-shadow: 0 0 20px rgba(245, 201, 138, 0.1);
   backdrop-filter: blur(12px);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .hud-icon-btn:hover {
-  border-color: rgba(232, 121, 249, 0.45);
-  box-shadow: 0 0 24px rgba(168, 85, 247, 0.25);
+  border-color: rgba(242, 184, 198, 0.5);
+  box-shadow: 0 0 24px rgba(245, 201, 138, 0.22);
 }
 
 .hud-icon-btn--active {
-  border-color: rgba(232, 121, 249, 0.75);
-  background: rgba(88, 28, 135, 0.45);
-  box-shadow: 0 0 20px rgba(168, 85, 247, 0.35);
+  border-color: rgba(232, 201, 106, 0.7);
+  background: rgba(42, 32, 18, 0.55);
+  box-shadow: 0 0 20px rgba(245, 201, 138, 0.28);
 }
 
 .hud-side-dock {
@@ -225,11 +225,11 @@ body {
   overflow: hidden;
   border-radius: 1.25rem;
   background: #000;
-  border: 1px solid rgba(168, 85, 247, 0.35);
+  border: 1px solid rgba(245, 201, 138, 0.32);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
-    0 0 50px rgba(168, 85, 247, 0.22),
-    0 0 100px rgba(99, 102, 241, 0.1);
+    0 0 0 1px rgba(255, 248, 231, 0.04) inset,
+    0 0 50px rgba(245, 201, 138, 0.18),
+    0 0 100px rgba(242, 184, 198, 0.08);
 }
 
 .hud-viewport--stage {
@@ -254,15 +254,15 @@ body {
 }
 
 .hud-camera-flip {
-  background: rgba(8, 6, 20, 0.55);
+  background: rgba(12, 20, 14, 0.62);
   backdrop-filter: blur(10px);
 }
 
 .hud-viewport-scan-fab {
   overflow: hidden;
   border-radius: 9999px;
-  border: 1px solid rgba(192, 132, 252, 0.45);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(245, 215, 142, 0.45);
+  box-shadow: 0 8px 28px rgba(18, 28, 18, 0.45);
 }
 
 .hud-viewport::before {
@@ -274,10 +274,10 @@ body {
   padding: 1px;
   background: linear-gradient(
     135deg,
-    rgba(232, 121, 249, 0.5),
+    rgba(245, 201, 138, 0.45),
     transparent 40%,
     transparent 60%,
-    rgba(129, 140, 248, 0.45)
+    rgba(242, 184, 198, 0.38)
   );
   mask:
     linear-gradient(#fff 0 0) content-box,
@@ -290,9 +290,9 @@ body {
   position: absolute;
   width: 28px;
   height: 28px;
-  border-color: rgba(192, 132, 252, 0.85);
+  border-color: rgba(245, 215, 142, 0.85);
   border-style: solid;
-  filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.6));
+  filter: drop-shadow(0 0 6px rgba(245, 201, 138, 0.5));
 }
 
 .hud-corner--tl {
@@ -326,7 +326,7 @@ body {
   width: 48px;
   height: 48px;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(192, 132, 252, 0.25);
+  border: 1px solid rgba(245, 215, 142, 0.28);
   border-radius: 50%;
   opacity: 0.6;
 }
@@ -335,7 +335,7 @@ body {
 .hud-crosshair::after {
   content: '';
   position: absolute;
-  background: rgba(192, 132, 252, 0.35);
+  background: rgba(245, 201, 138, 0.38);
 }
 
 .hud-crosshair::before {
@@ -359,8 +359,8 @@ body {
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.8), transparent);
-  box-shadow: 0 0 16px rgba(34, 211, 238, 0.5);
+  background: linear-gradient(90deg, transparent, rgba(245, 215, 142, 0.85), transparent);
+  box-shadow: 0 0 16px rgba(245, 201, 138, 0.45);
   animation: viewport-scan 4s ease-in-out infinite;
   opacity: 0.7;
 }
@@ -388,42 +388,42 @@ body {
 }
 
 .hud-hint {
-  border: 1px solid rgba(34, 211, 238, 0.2);
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.35));
+  border: 1px solid rgba(245, 201, 138, 0.25);
+  background: linear-gradient(180deg, rgba(12, 20, 14, 0.62), rgba(8, 14, 10, 0.42));
   backdrop-filter: blur(10px);
-  box-shadow: 0 0 24px rgba(6, 182, 212, 0.08);
+  box-shadow: 0 0 24px rgba(245, 201, 138, 0.08);
 }
 
 .hud-select {
   border-radius: 0.875rem;
-  border: 1px solid rgba(168, 85, 247, 0.28);
+  border: 1px solid rgba(245, 201, 138, 0.28);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(0, 0, 0, 0.35);
+    linear-gradient(180deg, rgba(255, 248, 231, 0.06), rgba(255, 248, 231, 0.02)),
+    rgba(12, 20, 14, 0.42);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-    0 0 30px rgba(168, 85, 247, 0.08);
+    0 0 0 1px rgba(255, 248, 231, 0.03) inset,
+    0 0 30px rgba(245, 201, 138, 0.08);
   backdrop-filter: blur(12px);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .hud-select:focus {
   outline: none;
-  border-color: rgba(232, 121, 249, 0.5);
+  border-color: rgba(242, 184, 198, 0.5);
   box-shadow:
-    0 0 0 1px rgba(232, 121, 249, 0.2) inset,
-    0 0 30px rgba(168, 85, 247, 0.2);
+    0 0 0 1px rgba(245, 215, 142, 0.2) inset,
+    0 0 30px rgba(245, 201, 138, 0.2);
 }
 
 .hud-scan-btn {
   border-radius: 0.875rem;
-  border: 1px solid rgba(232, 121, 249, 0.45);
+  border: 1px solid rgba(245, 215, 142, 0.45);
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
 .hud-scan-btn:not(:disabled):hover {
   transform: translateY(-1px);
-  box-shadow: 0 16px 48px rgba(168, 85, 247, 0.4);
+  box-shadow: 0 16px 48px rgba(245, 201, 138, 0.32);
 }
 
 .hud-scan-btn__bg {
@@ -431,13 +431,29 @@ body {
   inset: 0;
   background: linear-gradient(
     105deg,
-    #a855f7 0%,
-    #7c3aed 35%,
-    #6366f1 70%,
-    #8b5cf6 100%
+    #f2b8c6 0%,
+    #f5d78e 35%,
+    #e8c96a 70%,
+    #f5c98a 100%
   );
   background-size: 200% 100%;
   animation: btn-gradient 4s ease infinite;
+}
+
+.hud-scan-btn__label {
+  color: #1a2818;
+  text-shadow: 0 1px 0 rgba(255, 248, 231, 0.35);
+}
+
+.hud-scan-status {
+  background: rgba(8, 14, 10, 0.48);
+}
+
+.hud-scan-status__card {
+  border: 1px solid rgba(245, 201, 138, 0.28);
+  background: rgba(12, 20, 14, 0.72);
+  color: rgba(255, 244, 220, 0.92);
+  box-shadow: 0 0 24px rgba(245, 201, 138, 0.12);
 }
 
 .hud-scan-btn__shine {
@@ -677,198 +693,7 @@ body {
   }
 }
 
-/* --- Intro video → main app transition (phone-first) --- */
-.intro-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: #000;
-  padding:
-    env(safe-area-inset-top, 0px)
-    env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px)
-    env(safe-area-inset-left, 0px);
-  opacity: 0;
-  transition: opacity 0.48s ease;
-  pointer-events: none;
-}
-
-.intro-overlay--preparing {
-  opacity: 1;
-  pointer-events: none;
-}
-
-.intro-overlay--active {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.intro-overlay--handoff-in.intro-overlay--active .intro-overlay__video {
-  animation: intro-handoff-video-in 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
-
-@keyframes intro-handoff-video-in {
-  0% {
-    opacity: 0.35;
-    transform: scale(1.08);
-    filter: brightness(1.1) blur(6px) saturate(0.85);
-  }
-  45% {
-    opacity: 1;
-    filter: brightness(1.04) blur(1px) saturate(0.95);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-    filter: brightness(1) blur(0) saturate(1);
-  }
-}
-
-.intro-overlay--preparing .intro-overlay__video {
-  opacity: 0;
-}
-
-.intro-overlay--active .intro-overlay__video {
-  opacity: 1;
-}
-
-.intro-overlay__grid {
-  position: absolute;
-  inset: 0;
-  opacity: 0.22;
-  background-image:
-    linear-gradient(rgba(34, 211, 238, 0.16) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(34, 211, 238, 0.16) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-}
-
-.intro-overlay__vignette {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.6) 100%);
-  pointer-events: none;
-}
-
-.intro-overlay__video {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  max-height: 100dvh;
-  max-height: 100svh;
-  object-fit: contain;
-  object-position: center;
-  background: #000;
-}
-
-.intro-overlay__video--hidden {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.intro-overlay__skip {
-  position: absolute;
-  bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
-  right: max(1.25rem, env(safe-area-inset-right, 0px));
-  z-index: 3;
-  border-radius: 9999px;
-  border: 1px solid rgba(34, 211, 238, 0.4);
-  background: rgba(0, 0, 0, 0.45);
-  padding: 0.5rem 1.25rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  color: rgba(224, 250, 255, 0.95);
-  backdrop-filter: blur(12px);
-  transition: border-color 0.2s, background 0.2s, opacity 0.2s;
-}
-
-.intro-overlay__skip:hover:not(:disabled) {
-  border-color: rgba(56, 189, 248, 0.65);
-  background: rgba(0, 20, 40, 0.55);
-}
-
-.intro-overlay__skip:disabled {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.intro-overlay__sound-hint {
-  position: absolute;
-  bottom: max(5.5rem, calc(env(safe-area-inset-bottom, 0px) + 4.5rem));
-  left: 50%;
-  z-index: 3;
-  transform: translateX(-50%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
-  padding: 0.45rem 0.9rem;
-  font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(8, 6, 20, 0.72);
-  backdrop-filter: blur(8px);
-}
-
-.intro-scan-beam {
-  position: absolute;
-  left: -10%;
-  right: -10%;
-  z-index: 2;
-  height: 3px;
-  opacity: 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    #67e8f9,
-    #22d3ee,
-    #38bdf8,
-    #0ea5e9,
-    transparent
-  );
-  box-shadow:
-    0 0 20px rgba(34, 211, 238, 0.95),
-    0 0 50px rgba(56, 189, 248, 0.55),
-    0 0 90px rgba(14, 165, 233, 0.28);
-  pointer-events: none;
-}
-
-.intro-flash {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  opacity: 0;
-  background: radial-gradient(
-    circle at 50% 45%,
-    rgba(103, 232, 249, 0.42),
-    rgba(34, 211, 238, 0.22) 40%,
-    rgba(56, 189, 248, 0.1) 52%,
-    transparent 66%
-  );
-  pointer-events: none;
-}
-
-.intro-overlay--exit .intro-overlay__video {
-  animation: intro-video-exit 1.15s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-.intro-overlay--exit .intro-scan-beam {
-  animation: intro-scan-sweep 1.05s ease-in-out forwards;
-}
-
-.intro-overlay--exit .intro-flash {
-  animation: intro-flash 0.75s ease-out forwards;
-}
-
-.intro-overlay--exit {
-  animation: intro-overlay-fade 1.35s ease forwards;
-}
-
+/* intro-video-exit used by loading → scan handoff */
 @keyframes intro-video-exit {
   0% {
     transform: scale(1);
@@ -883,46 +708,6 @@ body {
     transform: scale(1.12);
     opacity: 0;
     filter: brightness(1.12) blur(10px) saturate(0.7);
-  }
-}
-
-@keyframes intro-scan-sweep {
-  0% {
-    top: -5%;
-    opacity: 0;
-  }
-  12% {
-    opacity: 1;
-  }
-  88% {
-    opacity: 1;
-  }
-  100% {
-    top: 105%;
-    opacity: 0;
-  }
-}
-
-@keyframes intro-flash {
-  0% {
-    opacity: 0;
-  }
-  25% {
-    opacity: 0.75;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
-@keyframes intro-overlay-fade {
-  0%,
-  55% {
-    background: #000;
-  }
-  100% {
-    background: transparent;
-    pointer-events: none;
   }
 }
 
@@ -962,12 +747,7 @@ body {
   .hud-live-dot,
   .hud-scan-btn__bg,
   .hud-scan-btn__shine,
-  .intro-overlay--exit .intro-overlay__video,
-  .intro-overlay--exit .intro-scan-beam,
-  .intro-overlay--exit .intro-flash,
-  .intro-overlay--exit,
   .intro-loading--handoff .intro-loading__stage,
-  .intro-overlay--handoff-in .intro-overlay__video,
   .main-reveal--active .main-reveal-item--1,
   .main-reveal--active .main-reveal-item--2,
   .main-reveal--active .main-reveal-item--3 {

@@ -1,11 +1,7 @@
--- Axerai Love ledger — simple 6 columns + id
--- One product code = max 2 rows (sender + receiver)
+-- Axerai Love — current ledger schema (reference / new project setup)
+-- For wipe + recreate with seed rows, use fresh_start.sql instead.
 
-drop table if exists messages cascade;
-drop table if exists scans cascade;
-drop table if exists ledger_threads cascade;
-
-create table ledger_threads (
+create table if not exists public.ledger_threads (
   id uuid primary key default gen_random_uuid(),
   verification_code text not null,
   device_id text not null default '',
@@ -17,14 +13,14 @@ create table ledger_threads (
   unique (verification_code, role)
 );
 
-create index idx_ledger_threads_code on ledger_threads(verification_code);
+create index if not exists idx_ledger_threads_code on public.ledger_threads (verification_code);
 
-alter table ledger_threads enable row level security;
+alter table public.ledger_threads enable row level security;
 
-drop policy if exists "anon insert ledger_threads" on ledger_threads;
-drop policy if exists "anon select ledger_threads" on ledger_threads;
-drop policy if exists "anon update ledger_threads" on ledger_threads;
+drop policy if exists "anon insert ledger_threads" on public.ledger_threads;
+drop policy if exists "anon select ledger_threads" on public.ledger_threads;
+drop policy if exists "anon update ledger_threads" on public.ledger_threads;
 
-create policy "anon insert ledger_threads" on ledger_threads for insert to anon with check (true);
-create policy "anon select ledger_threads" on ledger_threads for select to anon using (true);
-create policy "anon update ledger_threads" on ledger_threads for update to anon using (true);
+create policy "anon insert ledger_threads" on public.ledger_threads for insert to anon with check (true);
+create policy "anon select ledger_threads" on public.ledger_threads for select to anon using (true);
+create policy "anon update ledger_threads" on public.ledger_threads for update to anon using (true) with check (true);

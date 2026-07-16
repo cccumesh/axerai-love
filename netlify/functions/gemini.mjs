@@ -1,5 +1,5 @@
-const DEFAULT_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite']
-const RETRIES_PER_MODEL = 1
+const DEFAULT_MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-lite-latest']
+const RETRIES_PER_MODEL = 2
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -41,7 +41,25 @@ function isRetryable(status, detail) {
 }
 
 function retryDelayMs(attempt) {
-  return 400 * attempt
+  return 700 * attempt
+}
+
+/** Strip quotes/newlines — common when pasting keys into Netlify dashboard. */
+function sanitizeApiKey(raw) {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\s+/g, '')
+}
+
+function geminiAuthHint(detail) {
+  const msg = String(detail ?? '').toLowerCase()
+  if (!msg.includes('api key')) return null
+  return (
+    'Localhost uses VITE_GEMINI_API_KEY in the browser; Netlify uses GEMINI_API_KEY on the server (no HTTP Referer). ' +
+    'In Google AI Studio → API key → Application restrictions, set "None" for the server key, or create a second unrestricted key for GEMINI_API_KEY on Netlify. ' +
+    'Then Deploys → Trigger deploy.'
+  )
 }
 
 function buildParts(userPrompt, imagePart) {
@@ -59,10 +77,13 @@ function buildParts(userPrompt, imagePart) {
 }
 
 async function callGeminiModel({ apiKey, modelName, systemInstruction, userPrompt, imagePart, generationConfig }) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       systemInstruction: {
         parts: [{ text: String(systemInstruction ?? '') }],
@@ -107,9 +128,15 @@ export default async (request) => {
     return jsonResponse({ error: 'Method not allowed' }, 405)
   }
 
-  const apiKey = String(process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? '').trim()
+  const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY)
   if (!apiKey) {
-    return jsonResponse({ error: 'GEMINI_API_KEY missing on server' }, 500)
+    return jsonResponse(
+      {
+        error: 'GEMINI_API_KEY missing on server',
+        hint: 'Netlify → Environment variables → add GEMINI_API_KEY (same value as local VITE_GEMINI_API_KEY), then trigger deploy.',
+      },
+      500,
+    )
   }
 
   let body
@@ -157,7 +184,14 @@ export default async (request) => {
         const detail = error.detail ?? errorText(error)
 
         if (isFatal(status, detail)) {
-          return jsonResponse({ error: error.message ?? 'Gemini auth failed' }, status)
+          const hint = geminiAuthHint(detail)
+          return jsonResponse(
+            {
+              error: error.message ?? 'Gemini auth failed',
+              ...(hint ? { hint } : {}),
+            },
+            status >= 400 && status < 600 ? status : 401,
+          )
         }
 
         if (isModelUnavailable(status, detail)) break

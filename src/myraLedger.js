@@ -289,7 +289,6 @@ function buildSummaryFromConversation(conversation, roleKey = 'sender', sessionD
   )
   const lines = parseConversationLines(sessionOnly)
   const userSpeaker = roleKey === 'receiver' ? 'receiver' : 'sender'
-  const userLabel = roleKey === 'receiver' ? 'RECEIVER' : 'SENDER'
   const threadLabel = roleKey === 'receiver' ? 'Receiver' : 'Sender'
   const userLines = lines.filter((line) => line.speaker === userSpeaker)
   const myraLines = lines.filter((line) => line.speaker === 'myra')
@@ -1201,9 +1200,4 @@ export async function fetchDashboardScans(verificationCode = 'R') {
     conversation: thread.conversation,
     session_summaries: thread.session_summaries,
   }))
-}
-
-/** @deprecated Messages live inside thread.conversation now */
-export async function fetchDashboardMessages(_scanId) {
-  return []
 }

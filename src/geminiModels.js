@@ -1,28 +1,26 @@
 /** Shared Gemini model routing — one API key, task-specific chains with retry/fallback. */
 
-export const GEMINI_FLASH = 'gemini-2.5-flash'
-export const GEMINI_FLASH_LITE = 'gemini-2.5-flash-lite'
-export const GEMINI_FLASH_LITE_FALLBACK = 'gemini-3.1-flash-lite'
+/** Models that work reliably on new AI Studio keys (AQ.*). */
+export const GEMINI_CHAT_PRIMARY = 'gemini-3.1-flash-lite'
+export const GEMINI_CHAT_FALLBACK = 'gemini-flash-lite-latest'
 
-/** Myra chat: primary tier first, then fallbacks (never deprecated 2.0). */
-export const MYRA_CHAT_FLASH_CHAIN = [
-  GEMINI_FLASH,
-  GEMINI_FLASH_LITE,
-  GEMINI_FLASH_LITE_FALLBACK,
-]
+const CHAT_MODEL_CHAIN = [GEMINI_CHAT_PRIMARY, GEMINI_CHAT_FALLBACK]
 
-export const MYRA_CHAT_LITE_CHAIN = [
-  GEMINI_FLASH_LITE,
-  GEMINI_FLASH_LITE_FALLBACK,
-  GEMINI_FLASH,
-]
+/**
+ * Flash vs lite tier uses the same models on free keys — flash tier gets
+ * richer generationConfig in App.jsx (higher temperature).
+ */
+export const MYRA_CHAT_FLASH_CHAIN = CHAT_MODEL_CHAIN
+export const MYRA_CHAT_LITE_CHAIN = CHAT_MODEL_CHAIN
 
-/** Verify + exit summary — always lite-first. */
-export const VERIFY_MODEL_CHAIN = [GEMINI_FLASH_LITE, GEMINI_FLASH_LITE_FALLBACK]
-export const SUMMARY_MODEL_CHAIN = [GEMINI_FLASH_LITE, GEMINI_FLASH_LITE_FALLBACK]
+export const VERIFY_MODEL_CHAIN = CHAT_MODEL_CHAIN
+export const SUMMARY_MODEL_CHAIN = CHAT_MODEL_CHAIN
 
 export const MYRA_FLASH_USER_TURNS = 6
 export const MYRA_FLASH_LONG_MSG_WORDS = 150
+
+export const MYRA_FLASH_GENERATION = { temperature: 0.95, topP: 0.95, topK: 40 }
+export const MYRA_LITE_GENERATION = { temperature: 0.85, topP: 0.88, topK: 32 }
 
 export function countWords(text) {
   return String(text ?? '')
@@ -31,13 +29,10 @@ export function countWords(text) {
     .filter(Boolean).length
 }
 
-/**
- * Myra chat model pick:
- * - First 6 user messages per session → Flash chain
- * - User message ≥ 150 words → Flash chain
- * - Welcome/boot → force Flash
- * - Else → Lite chain
- */
+export function myraGenerationConfig(tier = 'lite') {
+  return tier === 'flash' ? MYRA_FLASH_GENERATION : MYRA_LITE_GENERATION
+}
+
 export function resolveMyraChatModels({
   userText = '',
   userTurnCount = 0,

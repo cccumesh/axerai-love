@@ -26,7 +26,11 @@ export async function askGeminiViaProxy({
 
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new Error(payload.error ?? `Gemini proxy HTTP ${response.status}`)
+    const message = payload.error ?? `Gemini proxy HTTP ${response.status}`
+    const hint = payload.hint ? `\n${payload.hint}` : ''
+    const err = new Error(`${message}${hint}`)
+    err.hint = payload.hint ?? null
+    throw err
   }
 
   if (!payload.text) {

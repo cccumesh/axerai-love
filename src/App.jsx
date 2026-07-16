@@ -30,7 +30,11 @@ import {
   resetMyraChatTurns,
 } from './myraPrompt.js'
 import { MyraStaticSession } from './myraStaticSession.jsx'
-import { MYRA_CHAT_LITE_CHAIN, resolveMyraChatModels } from './geminiModels.js'
+import {
+  MYRA_CHAT_LITE_CHAIN,
+  myraGenerationConfig,
+  resolveMyraChatModels,
+} from './geminiModels.js'
 import {
   isElevenLabsConfigured,
   speakWithElevenLabs,
@@ -94,7 +98,7 @@ function logAxeraiBuildConfig() {
   }
 }
 const GEMINI_VISION_ENABLED = false
-const GEMINI_RETRIES_PER_MODEL = 1
+const GEMINI_RETRIES_PER_MODEL = 2
 const MINDAR_TARGET = '/targets.mind'
 const INTRO_LOADING_BG = '/images/richera-loading.png'
 /** Roman Hinglish transcript — hi-IN returns Devanagari (अ आ) on most phones */
@@ -544,7 +548,6 @@ function MindARSession({
 
     let active = true
     let mindarThree = null
-    let started = false
     let disposeTargetVideo = null
     let keepCameraAlive = Boolean(previewStream?.active)
     const sessionGen = { id: 0 }
@@ -649,7 +652,6 @@ function MindARSession({
             : false,
         )
 
-        started = true
         if (sessionGen.id === mySession) {
           onSessionReady?.()
         }
@@ -714,9 +716,6 @@ function MindARSession({
     </div>
   )
 }
-
-/** Ledger + backend always use this one code for the RICHERA product. */
-const VERIFICATION_CODE = 'R'
 
 function drawVideoFrameToCanvas(video, { centerCropFactor = 1 } = {}) {
   const vw = video.videoWidth
@@ -825,7 +824,7 @@ function isGeminiRetryableError(error) {
 }
 
 function geminiRetryDelayMs(attempt) {
-  return 400 * attempt
+  return 500 * attempt
 }
 
 function parseDataUrl(dataUrl) {
@@ -906,7 +905,6 @@ function App() {
   const [startupAccess, setStartupAccess] = useState('loading')
   const [startupAccessHint, setStartupAccessHint] = useState(null)
   const [introReadyToEnter, setIntroReadyToEnter] = useState(false)
-  const [devices, setDevices] = useState([])
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [cameraFacing, setCameraFacing] = useState('environment')
   const [cameraInitReady, setCameraInitReady] = useState(false)
@@ -953,9 +951,7 @@ function App() {
 
   const loadDevices = useCallback(async () => {
     const all = await navigator.mediaDevices.enumerateDevices()
-    const videoInputs = all.filter((device) => device.kind === 'videoinput')
-    setDevices(videoInputs)
-    return videoInputs
+    return all.filter((device) => device.kind === 'videoinput')
   }, [])
 
   const grantStartupAccess = useCallback(async () => {
@@ -1270,7 +1266,11 @@ function mapGeminiCallType(reason) {
     const imagePart =
       GEMINI_VISION_ENABLED && imageDataUrl ? parseDataUrl(imageDataUrl) : null
 
-    console.info(`[Gemini] Myra chat tier=${tier} reason=${reason || 'default'} chain=${models.join(' → ')}`)
+    const generationConfig = myraGenerationConfig(tier)
+
+    console.info(
+      `[Gemini] Myra chat tier=${tier} reason=${reason || 'default'} chain=${models.join(' → ')}`,
+    )
 
     if (USE_API_PROXY) {
       const payload = await askGeminiViaProxy({
@@ -1278,10 +1278,7 @@ function mapGeminiCallType(reason) {
         systemInstruction: MYRA_SYSTEM_PROMPT,
         models,
         imagePart,
-        generationConfig: {
-          temperature: 0.9,
-          topP: 0.92,
-        },
+        generationConfig,
       })
 
       void recordGeminiUsage({
@@ -1317,31 +1314,21 @@ function mapGeminiCallType(reason) {
       const modelName = models[modelIndex]
       const isFallback = modelIndex > 0
 
-      if (imagePart) {
-        const kb = Math.round((imagePart.data.length * 3) / 4 / 1024)
-        console.log(
-          `[Gemini] ${modelName}${isFallback ? ' (fallback)' : ''} vision ON — ${imagePart.mimeType}, ~${kb}KB`,
-        )
-      }
-
       for (let attempt = 1; attempt <= GEMINI_RETRIES_PER_MODEL; attempt += 1) {
         try {
           const model = client.getGenerativeModel({
             model: modelName,
             systemInstruction: MYRA_SYSTEM_PROMPT,
-            generationConfig: {
-              temperature: 0.9,
-              topP: 0.92,
-            },
+            generationConfig,
           })
 
-          const result = await model.generateContentStream(parts)
           let fullResponse = ''
-          for await (const chunk of result.stream) {
-            fullResponse += chunk.text()
-          }
+          let usage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 }
 
-          const usage = usageFromResponse(await result.response)
+          const result = await model.generateContent({ contents: [{ role: 'user', parts }] })
+          fullResponse = result.response.text()
+          usage = usageFromResponse(result.response)
+
           void recordGeminiUsage({
             callType: mapGeminiCallType(reason),
             model: modelName,
@@ -1352,23 +1339,34 @@ function mapGeminiCallType(reason) {
 
           if (isFallback || attempt > 1) {
             console.log(`[Gemini] OK — ${modelName}${attempt > 1 ? ` (retry ${attempt})` : ''}`)
+          } else {
+            console.log(`[Gemini] OK — ${modelName}`)
           }
 
           return fullResponse
         } catch (error) {
           lastError = error
           const msg = error?.message ?? String(error)
-          console.warn(
-            `[Gemini] ${modelName} attempt ${attempt}/${GEMINI_RETRIES_PER_MODEL} failed:`,
-            msg,
-          )
+          const retryable = isGeminiRetryableError(error)
+          const canRetry = retryable && attempt < GEMINI_RETRIES_PER_MODEL
+
+          if (canRetry) {
+            console.info(
+              `[Gemini] ${modelName} busy (${msg.slice(0, 80)}…) — retry ${attempt + 1}/${GEMINI_RETRIES_PER_MODEL}`,
+            )
+          } else if (isFallback || modelIndex < models.length - 1) {
+            console.info(`[Gemini] ${modelName} unavailable — trying next model`)
+          } else {
+            console.warn(
+              `[Gemini] ${modelName} attempt ${attempt}/${GEMINI_RETRIES_PER_MODEL} failed:`,
+              msg,
+            )
+          }
 
           if (isGeminiFatalError(error)) throw error
 
           if (isGeminiModelUnavailable(error)) break
 
-          const canRetry =
-            isGeminiRetryableError(error) && attempt < GEMINI_RETRIES_PER_MODEL
           if (canRetry) {
             await new Promise((resolve) => {
               window.setTimeout(resolve, geminiRetryDelayMs(attempt))

@@ -59,6 +59,10 @@ RULE 13 — ONE BEAT PER REPLY: No fact mashing unless user linked facts in one 
 
 RULE 14 — FRESH VOICE: New Hinglish every turn. Lore words max once per session.
 
+RULE 14b — PLACE NAME ONCE (NOT SLANG BAN): Say the city/area NAME from LIVE_CONTEXT at most ONCE — on first scan welcome only. After that: no repeating place name, weather report, or "yahan/sheher/tumhare city" every turn. This is NOT a ban on slang — see RULE 14c.
+
+RULE 14c — LOCAL SLANG IS MYRA'S SOUL (ALWAYS ON): Wherever the user scans, Myra picks up THAT region's vibe in natural Hinglish every reply — Maharashtra → Marathi sprinkle; Punjab → Punjabi sprinkle (haan ji, kadak, oye, kida vibe); other regions → match local flavor from LIVE_CONTEXT. Chatpati, bindaas, NOT textbook Hindi. Place name once ≠ stop being local. Slang every turn = yes. City name every turn = no.
+
 RULE 15 — NO SCRIPT LOOP: No corporate onboarding, no boot repeat after turn 1, no brochure.
 
 RULE 16 — NO FACT ECHO: Once a fact acknowledged, do not repeat next 3 replies unless user brings it back.
@@ -80,7 +84,7 @@ RULE 23 — MEMORY PURPOSE: Collect soul memories for recipient — love depth, 
 === [BRAND PERSONA BIBLE: MYRA (Richera Kingdom)] ===
 
 A. TTS: Spoken words only. No action tags. No emojis.
-B. Maharashtra location → light Marathi sprinkle OK in boot.
+B. Regional slang EVERY reply — Maharashtra/Marathi, Punjab/Punjabi, etc. from LIVE_CONTEXT. City NAME only once on first scan — slang never stops.
 C. ZERO CUSTOMER SERVICE: Enter like fairy landed in human world — playful, real.
 D. Anti-Senti: Emotion through chatpati humor, not heavy speeches.
 E. Exasperated Bestie: Roast overthinkers, don't lecture.
@@ -92,7 +96,7 @@ Myra — living fairy from Richera. Heart Tree holds memories (internal lore). J
 --- 6. GIFT HANDLING (LOGIC ONLY) ---
 
 [GIFT-GIVER] FLOW:
-A. BOOT — human-world entry + city from LIVE_CONTEXT + ask name.
+A. BOOT — human-world entry + city ONCE from LIVE_CONTEXT (local slang) + ask name.
 B. AFTER NAME — clarity: gift's living voice, not bot + who is gift for.
 C. AFTER HER NAME — react + ask occasion (birthday/special day/why now).
 D. AFTER OCCASION — celebrate + absorb why bought + product praise if user gives.
@@ -104,24 +108,22 @@ F. RETURN — warm continue, no re-intro.
 === [FINAL ACTIVATION — BEFORE EVERY REPLY] ===
 
 1. Spoken words only — no (), **, emojis.
-2. Myra vibe on — sass, taana, chatpati.
+2. Myra vibe on — sass, taana, chatpati, LOCAL SLANG (Marathi/Punjabi/etc. per region).
 3. Hinglish output.
 4. AI question? DENY in-character — never admit AI.
 5. Fresh words — not copying last reply.
 
 === [FIRST REPLY PRIORITY (BOOT)] ===
 
-GIFT-GIVER: STEP A — entry + city + ask name. 50–90 words. Personality max.
-GIFT-RECIPIENT: Section 6 recipient structure. ONE beat.
+GIFT-GIVER: STEP A — entry + city ONCE (local slang only) + ask name. 50–90 words. Personality max.
+GIFT-RECIPIENT: Section 6 recipient structure. City AT MOST once if it adds vibe — then story beat.
 `.trim()
 
-export const MYRA_BOOT_MODE_NOTE = `RUNTIME: BOOT — STEP A. Personality max. Fresh words only.`
+export const MYRA_BOOT_MODE_NOTE = `RUNTIME: BOOT — STEP A. Personality + regional slang max (Marathi/Punjabi/etc.). Place name once only.`
 
 export const MYRA_RESUME_MODE_NOTE = `RUNTIME: RETURN SCAN — continue from ledger. No boot. React first.`
 
-export const MYRA_MIDCHAT_MODE_NOTE = `RUNTIME: MID-CHAT — React first. FLOW if rich story, GAP if thin. AI question = deny in-character. Rule 20 no message form.`
-
-export const MYRA_VISION_MODE_NOTE = MYRA_MIDCHAT_MODE_NOTE
+export const MYRA_MIDCHAT_MODE_NOTE = `RUNTIME: MID-CHAT — React first. LOCAL SLANG on (regional). Repeat place NAME not slang. FLOW if rich story, GAP if thin.`
 
 export function getMyraRuntimeNote(type) {
   if (type === 'welcome') return MYRA_BOOT_MODE_NOTE
@@ -206,16 +208,100 @@ function buildRoleCommand(sessionRole) {
   return 'INTERNAL: retail/keepsake default unless context says gift.'
 }
 
-function buildLocationFlavor(locationArea) {
+const REGION_SLANG_HINTS = [
+  {
+    label: 'Maharashtra',
+    test: /maharashtra|jalgaon|pune|mumbai|nagpur|nashik|kolhapur|aurangabad|solapur|amravati|akola|dhule|sangli|satara|thane|asoda|bhusawal|buldhana|yavatmal|wardha|gondia|chandrapur|latur|nanded|parbhani|beed|osmanabad|ratnagiri|raigad|palghar|washim|hingoli|gadchiroli/i,
+    flavor:
+      'natural Marathi sprinkle — maza, ekdum, arre baap re, mast, kiti, jhakaas, barrr (woven in, not forced)',
+  },
+  {
+    label: 'Punjab',
+    test: /punjab|chandigarh|amritsar|ludhiana|jalandhar|patiala|bathinda|mohali|sas nagar|pathankot|hoshiarpur|kapurthala|moga|firozpur|sangrur|barnala|faridkot|gurdaspur|fazilka|abohar|muktsar|rajpura|phagwara|khanna|zirakpur|ropar|nawanshahr|malerkotla|mandi gobindgarh|batala|khanna|mansa|fatehgarh|tarn taran|mohali/i,
+    flavor:
+      'natural Punjabi sprinkle — haan ji, kadak, oye, kida, vadiya, shaandaar, chak de, puttar, yaar, kaim (chatpati Hinglish-Punjabi mix)',
+  },
+  {
+    label: 'Delhi-NCR',
+    test: /delhi|new delhi|ncr|noida|gurgaon|gurugram|faridabad|ghaziabad|greater noida/i,
+    flavor: 'Dilli vibe — yaar, bhai, mast, jhakaas, kya scene, full bindaas, kadak',
+  },
+  {
+    label: 'Gujarat',
+    test: /gujarat|ahmedabad|surat|vadodara|rajkot|bhavnagar|jamnagar|gandhinagar|anand|mehsana|navsari|morbi|junagadh/i,
+    flavor: 'light Gujarati sprinkle — kem cho, maja ma, bhale, saras, ekdum (Hinglish-Gujju mix)',
+  },
+]
+
+function matchRegionSlang(locationArea) {
   const area = String(locationArea ?? '').toLowerCase()
-  if (
-    /maharashtra|jalgaon|pune|mumbai|nagpur|nashik|kolhapur|aurangabad|solapur|amravati|akola|dhule|sangli|satara|thane/i.test(
-      area,
-    )
-  ) {
-    return 'LOCAL: Maharashtra — light Marathi sprinkle OK in boot/clarity. City from LIVE_CONTEXT only.'
+  return REGION_SLANG_HINTS.find((region) => region.test.test(area)) ?? null
+}
+
+/** Local slang hint — every reply, not boot-only. Separate from place-name-once rule. */
+function buildLocalSlangHint(locationArea) {
+  if (isLocationUnavailable(locationArea)) {
+    return 'LOCAL SLANG: Natural chatpati Hinglish every reply — bindaas, mirror user. No place names unless first boot.'
   }
-  return ''
+
+  const region = matchRegionSlang(locationArea)
+  if (region) {
+    return (
+      `LOCAL SLANG (EVERY REPLY — CRITICAL): User is in ${region.label}. Myra's jan = chatpati Hinglish + ${region.flavor}. ` +
+      'This is NOT the city name — keep local flavor alive all session. Do NOT go generic Hindi.'
+    )
+  }
+
+  return (
+    'LOCAL SLANG (EVERY REPLY): Match regional vibe from LIVE_CONTEXT in natural Hinglish — local words, chatpati tone. ' +
+    'Do not repeat city/place NAME every turn; slang and vibe stay ON.'
+  )
+}
+
+function isLocationUnavailable(locationArea) {
+  const area = String(locationArea ?? '').trim()
+  return !area || /unavailable|denied|unknown/i.test(area)
+}
+
+function extractCityToken(locationArea) {
+  const area = String(locationArea ?? '').trim()
+  if (isLocationUnavailable(area)) return ''
+  return area.split(',')[0].trim().toLowerCase()
+}
+
+function locationAlreadyMentioned(memoryText, locationArea) {
+  const cityToken = extractCityToken(locationArea)
+  if (!cityToken || cityToken.length < 3) return false
+  const block = extractCurrentSessionFromMemoryText(memoryText).toLowerCase()
+  return block.includes(cityToken)
+}
+
+function buildLocationRule({ locationArea, type, bootDone, memoryText = '', userText = '' }) {
+  const area = String(locationArea ?? '').trim()
+
+  if (type === 'welcome' && !bootDone && !locationAlreadyMentioned(memoryText, area)) {
+    if (isLocationUnavailable(area)) {
+      return 'PLACE NAME: Unavailable — skip city name. LOCAL SLANG still on per hint below.'
+    }
+    return `PLACE NAME (FIRST SCAN ONLY): User near "${area}". Say this place name AT MOST ONCE this reply to land the vibe — then story/slang. LOCAL SLANG continues every later reply without repeating "${extractCityToken(area) || area}".`
+  }
+
+  if (isLocationUnavailable(area)) {
+    return 'PLACE NAME: Unavailable — do not invent cities. LOCAL SLANG: natural Hinglish every reply.'
+  }
+
+  const cityToken = extractCityToken(area)
+  const userMentionedPlace =
+    cityToken.length >= 3 &&
+    new RegExp(`\\b${cityToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
+      String(userText),
+    )
+
+  if (userMentionedPlace) {
+    return `PLACE NAME: User said "${cityToken}" — echo place name once only if joke fits. LOCAL SLANG stays on regardless.`
+  }
+
+  return `PLACE NAME BAN: Do NOT repeat city/area name ("${area}"), weather, or "yahan/sheher" this session. LOCAL SLANG from region STILL REQUIRED every reply — see LOCAL SLANG hint. Myra without slang = wrong character.`
 }
 
 /** True when user is actively feeding story — stay in flow, do not break topic. */
@@ -296,13 +382,13 @@ function deriveSenderFlowHint(memoryText, userText = '') {
   } else if (hasOccasion && !hasStory && !storyAsked) {
     hints.push('STEP D→E — celebrate occasion, then story.')
   } else if (hasStory || hasOccasion) {
-    if (memoryGaps.length) {
+    if (hasProductPraise && !hasStory) {
+      hints.push('STEP E — move into story/memory.')
+    } else if (memoryGaps.length) {
       hints.push(`GAP — probe one missing memory: ${memoryGaps[0]}.`)
     } else {
       hints.push('FLOW — story going well, keep engaging.')
     }
-  } else if (hasOccasion && hasProductPraise) {
-    hints.push('STEP E — move into story/memory.')
   } else {
     hints.push('React to user, one beat forward.')
   }
@@ -311,7 +397,7 @@ function deriveSenderFlowHint(memoryText, userText = '') {
 }
 
 /** Emotional gauge from current user words only — avoid permanent soul mode from ledger. */
-function buildSessionModeHint(userText, _memoryText = '', sessionRole = '') {
+function buildSessionModeHint(userText, sessionRole = '') {
   const t = String(userText).toLowerCase()
   const lines = []
 
@@ -346,7 +432,7 @@ function getLastMyraLine(memoryText) {
 }
 
 /** Build anti-loop hints from Axerai Ledger memory text */
-function buildAntiLoopHint(memoryText) {
+function buildAntiLoopHint(memoryText, locationArea = '') {
   const currentBlock = extractCurrentSessionFromMemoryText(memoryText)
   const m = String(memoryText)
   const myraTurns = (currentBlock.match(/myra:/gi) || []).length
@@ -362,6 +448,12 @@ function buildAntiLoopHint(memoryText) {
 
   if (factEchoHits >= 2) {
     lines.push('FACT ECHO BAN: durations/city already said — do not repeat in next replies.')
+  }
+
+  if (locationArea && locationAlreadyMentioned(m, locationArea)) {
+    lines.push(
+      'PLACE NAME BAN: city name already used — do NOT repeat place name or weather. Regional SLANG (Marathi/Punjabi/etc.) still required every turn.',
+    )
   }
 
   if (loreHits >= 1) {
@@ -381,8 +473,6 @@ function buildAntiLoopHint(memoryText) {
 
   return lines.join('\n')
 }
-
-export const MYRA_VOICE_MODE_NOTE = MYRA_VISION_MODE_NOTE
 
 function readSession() {
   try {
@@ -414,7 +504,7 @@ export function registerProductScan() {
   return scanCount
 }
 
-/** Reset per scan — first 3 user msgs use Flash again. */
+/** Reset per scan — first 6 user msgs use flash-tier config again. */
 export function resetMyraChatTurns() {
   const session = readSession()
   writeSession({ ...session, userTurnCount: 0 })
@@ -573,14 +663,20 @@ export function buildMyraUserPrompt({
   silenceTurns = 0,
 }) {
   const contextJson = JSON.stringify(liveContext ?? {}, null, 2)
-  const antiLoop = buildAntiLoopHint(memoryText)
-  const runtimeNote = getMyraRuntimeNote(type)
+  const locationArea = liveContext?.locationArea ?? 'unknown'
   const bootDone = isBootComplete() || (type !== 'welcome' && type !== 'resume')
+  const antiLoop = buildAntiLoopHint(memoryText, locationArea)
+  const runtimeNote = getMyraRuntimeNote(type)
   const roleCommand = buildRoleCommand(sessionRole)
 
-  const locationArea = liveContext?.locationArea ?? 'unknown'
-  const locationRule = `LOCATION: User in "${locationArea}" per LIVE_CONTEXT only. Mention ONLY this place. Do NOT invent other cities. If unavailable, skip city talk.`
-  const locationFlavor = buildLocationFlavor(locationArea)
+  const locationRule = buildLocationRule({
+    locationArea,
+    type,
+    bootDone,
+    memoryText,
+    userText,
+  })
+  const localSlangHint = buildLocalSlangHint(locationArea)
 
   const ledgerBlock = `AXERAI_LEDGER:\n${memoryText}`
   const antiLoopBlock = antiLoop ? `\n${antiLoop}` : ''
@@ -593,7 +689,7 @@ export function buildMyraUserPrompt({
 
     return `${runtimeNote}
 ${roleCommand ? `${roleCommand}\n` : ''}${locationRule}
-${locationFlavor ? `${locationFlavor}\n` : ''}
+${localSlangHint}
 LIVE_CONTEXT:
 ${contextJson}
 
@@ -605,14 +701,14 @@ ${resumeTask}`
   if (type === 'welcome') {
     const bootTask =
       sessionRole === 'RECEIVER'
-        ? 'TASK: RECEIVER first scan — reunion + ONE ledger beat, 60–100 words.'
+        ? 'TASK: RECEIVER first scan — reunion + ONE ledger beat, 60–100 words. Place name once OK; regional slang ON.'
         : sessionRole === 'SENDER'
-          ? 'TASK: STEP A boot — entry + city + name. No gift/occasion/story yet.'
-          : 'TASK: STEP A — entry + ask name.'
+          ? 'TASK: STEP A boot — entry + place name ONCE + regional slang (Marathi/Punjabi/etc.) + ask name. No gift/occasion/story yet.'
+          : 'TASK: STEP A — entry + ask name. Regional slang ON.'
 
     return `${runtimeNote}
 ${roleCommand ? `${roleCommand}\n` : ''}${locationRule}
-${locationFlavor ? `${locationFlavor}\n` : ''}
+${localSlangHint}
 LIVE_CONTEXT:
 ${contextJson}
 
@@ -623,6 +719,9 @@ ${bootTask}`
 
   if (type === 'silence') {
     return `${runtimeNote}
+
+${locationRule}
+${localSlangHint}
 
 LIVE_CONTEXT:
 ${contextJson}
@@ -635,7 +734,7 @@ TASK: Light tease (20–50 words). Turn 3+ → <SYSTEM_SLEEP>.`
   }
 
   const length = detectReplyLengthMode(userText)
-  const sessionHint = buildSessionModeHint(userText, memoryText, sessionRole)
+  const sessionHint = buildSessionModeHint(userText, sessionRole)
   const senderFlow =
     sessionRole === 'SENDER' && type !== 'welcome' && type !== 'resume'
       ? deriveSenderFlowHint(memoryText, userText)
@@ -644,6 +743,7 @@ TASK: Light tease (20–50 words). Turn 3+ → <SYSTEM_SLEEP>.`
   return `${runtimeNote}
 
 ${locationRule}
+${localSlangHint}
 
 LIVE_CONTEXT:
 ${contextJson}
@@ -665,7 +765,9 @@ MAX WORDS: ${length.max}`
 function stripMyraEmojis(text) {
   return String(text)
     .replace(/\p{Extended_Pictographic}/gu, '')
-    .replace(/[\u2600-\u27BF\uFE0F\u200D]/g, '')
+    .replace(/\uFE0F/g, '')
+    .replace(/\u200D/g, '')
+    .replace(/[\u2600-\u27BF]/g, '')
     .replace(/(^|\s):[a-z0-9_+-]+:(?=\s|$)/gi, ' ')
     .replace(/(^|\s)[;:][-~]?[)DdpP3oO|/\\]+(?=\s|$)/g, ' ')
 }

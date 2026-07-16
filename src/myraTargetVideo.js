@@ -1,22 +1,41 @@
 import { PlaneGeometry, MeshBasicMaterial, Mesh, VideoTexture, DoubleSide } from 'three'
 
 export const TARGET_VIDEO_PATH = '/videos/target.mp4'
-const TARGET_VIDEO_FALLBACK_MS = 20000
 const TARGET_PLANE_WIDTH = 1
 
+let targetVideoPreloadPromise = null
+
 export function preloadTargetVideo() {
-  const video = document.createElement('video')
-  video.preload = 'auto'
-  video.muted = true
-  video.playsInline = true
-  video.src = TARGET_VIDEO_PATH
-  video.load()
+  if (targetVideoPreloadPromise) return targetVideoPreloadPromise
+
+  targetVideoPreloadPromise = new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    video.preload = 'auto'
+    video.muted = true
+    video.playsInline = true
+    video.src = TARGET_VIDEO_PATH
+
+    const finish = () => {
+      console.info('[TargetVideo] preloaded — ready for anchor')
+      resolve()
+    }
+
+    video.addEventListener('canplaythrough', finish, { once: true })
+    video.addEventListener('error', () => {
+      targetVideoPreloadPromise = null
+      reject(new Error('Target video preload failed'))
+    }, { once: true })
+    video.load()
+  })
+
+  return targetVideoPreloadPromise
 }
 
-export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded }) {
+export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded, onCardTracked }) {
   let disposed = false
   let finished = false
   let playing = false
+  let everPlayed = false
 
   const video = document.createElement('video')
   video.src = TARGET_VIDEO_PATH
@@ -52,11 +71,11 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded }) {
   const finish = () => {
     if (finished || disposed) return
     finished = true
+    if (everPlayed) onEnded?.()
     cleanupMesh()
     video.pause()
     video.removeAttribute('src')
     video.load()
-    onEnded?.()
   }
 
   const resizePlane = () => {
@@ -74,6 +93,7 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded }) {
     if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
     playing = true
+    everPlayed = true
     video.currentTime = 0
     video.muted = true
 
@@ -91,6 +111,7 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded }) {
 
   const onTargetFound = () => {
     if (disposed || finished) return
+    onCardTracked?.('video')
     void tryPlay()
   }
 
@@ -107,27 +128,16 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded }) {
   }
 
   video.addEventListener('loadedmetadata', resizePlane)
-  video.addEventListener('canplay', () => {
-    if (anchor?.group?.visible) onTargetFound()
-  })
   video.addEventListener('ended', finish)
   video.addEventListener('error', () => {
-    console.warn('[TargetVideo] load error — skipping to Myra')
-    finish()
+    console.warn('[TargetVideo] load error')
+    if (everPlayed) finish()
   })
 
   video.load()
 
-  const fallbackTimer = window.setTimeout(() => {
-    if (!finished && !disposed) {
-      console.warn('[TargetVideo] fallback timeout — showing Myra')
-      finish()
-    }
-  }, TARGET_VIDEO_FALLBACK_MS)
-
   return () => {
     disposed = true
-    window.clearTimeout(fallbackTimer)
     anchor.onTargetFound = previousTargetFound ?? null
     anchor.onTargetLost = previousTargetLost ?? null
     if (!finished) cleanupMesh()

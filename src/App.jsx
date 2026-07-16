@@ -1,31 +1,48 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { AmbientLight, DirectionalLight, Clock } from 'three'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
-import Tesseract from 'tesseract.js'
 import {
   askGeminiViaProxy,
   USE_API_PROXY,
 } from './apiProxy.js'
 import {
+  classifyGeminiError,
+  getMyraErrorTriggerNote,
+  isOfflineMyraFallback,
+  MYRA_ERROR_PHASE,
+  MYRA_ERROR_SITUATIONS,
+  pickMyraErrorLine,
+  resetMyraErrorLineMemory,
+  shouldSpeakMyraError,
+} from './myraErrorFallback.js'
+import {
   MYRA_SYSTEM_PROMPT,
-  appendMyraHistory,
   buildMyraUserPrompt,
   myraResponseHasSystemSleep,
   clearMyraSession,
   fetchLiveContext,
+  getMyraChatTurnCount,
+  incrementMyraChatTurn,
   markBootComplete,
+  prepareMyraLedgerText,
   prepareMyraSpeechText,
   registerProductScan,
+  resetMyraChatTurns,
 } from './myraPrompt.js'
+import { MyraStaticSession } from './myraStaticSession.jsx'
+import { MYRA_CHAT_LITE_CHAIN, resolveMyraChatModels } from './geminiModels.js'
 import {
   isElevenLabsConfigured,
   speakWithElevenLabs,
   primeMobileAudio,
   stopElevenLabsSpeech,
 } from './elevenLabsTts.js'
-import { MyraModel, preloadMyraModels, tickMyraMixer, MYRA_MODEL_PATH } from './myraModel.js'
-import { mountTargetAnchorVideo, preloadTargetVideo } from './myraTargetVideo.js'
+import { MyraModel, tickMyraMixer, MYRA_MODEL_PATH } from './myraModel.js'
+import { mountTargetAnchorVideo } from './myraTargetVideo.js'
+import { loadAxeraiExperienceAssets } from './axeraiAssets.js'
+import { isGeminiVerifyConfigured, VERIFY_FAIL_REASON, verifyRicheraProduct } from './myraVerify.js'
 import { startSpeechLipSync, stopSpeechLipSync } from './myraLipSync.js'
+import { usageFromResponse } from './geminiUsage.js'
 import {
   appendLedgerMessage,
   buildGeminiMemoryText,
@@ -34,8 +51,10 @@ import {
   getLedgerWelcomeMode,
   getLedgerSessionInfo,
   isLedgerConfigured,
+  isLedgerScanActive,
   prefetchLedgerMemory,
   probeLedgerHealth,
+  recordGeminiUsage,
   startLedgerScan,
 } from './myraLedger.js'
 
@@ -75,11 +94,9 @@ function logAxeraiBuildConfig() {
   }
 }
 const GEMINI_VISION_ENABLED = false
-const GEMINI_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite']
 const GEMINI_RETRIES_PER_MODEL = 1
 const MINDAR_TARGET = '/targets.mind'
 const INTRO_LOADING_BG = '/images/richera-loading.png'
-const INTRO_LOADING_MIN_MS = 3000
 /** Roman Hinglish transcript — hi-IN returns Devanagari (अ आ) on most phones */
 const SPEECH_RECO_LANG = 'en-IN'
 /** Pause after speech ends before auto-send (live mic) */
@@ -93,28 +110,107 @@ function pickBackCameraId(devices) {
   return back?.deviceId ?? ''
 }
 
-async function requestStartupPermissions() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' } },
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  })
-  stream.getTracks().forEach((track) => track.stop())
+async function acquireCameraStream(selectedDeviceId, cameraFacing) {
+  const attempts = []
 
-  await new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      resolve()
-      return
+  if (selectedDeviceId) {
+    attempts.push({ video: { deviceId: { exact: selectedDeviceId } }, audio: false })
+  }
+  attempts.push({ video: { facingMode: { ideal: cameraFacing } }, audio: false })
+  if (cameraFacing === 'environment') {
+    attempts.push({ video: { facingMode: { ideal: 'user' } }, audio: false })
+  }
+  attempts.push({ video: true, audio: false })
+
+  let lastError = null
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
     }
-    navigator.geolocation.getCurrentPosition(() => resolve(), () => resolve(), {
-      enableHighAccuracy: false,
-      timeout: 12000,
-      maximumAge: 300000,
-    })
-  })
+  }
+
+  throw lastError ?? new Error('Could not access camera')
+}
+
+const STARTUP_AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+}
+
+/** Camera + mic in one browser prompt — stream kept alive for instant preview. */
+async function acquireStartupStream() {
+  const attempts = [
+    {
+      video: { facingMode: { ideal: 'environment' } },
+      audio: STARTUP_AUDIO_CONSTRAINTS,
+    },
+    {
+      video: { facingMode: { ideal: 'user' } },
+      audio: STARTUP_AUDIO_CONSTRAINTS,
+    },
+    { video: true, audio: STARTUP_AUDIO_CONSTRAINTS },
+  ]
+
+  let lastError = null
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError ?? new Error('Could not access camera or microphone')
+}
+
+function requestGeolocationInBackground() {
+  if (!navigator.geolocation) return
+  navigator.geolocation.getCurrentPosition(
+    () => {},
+    () => {},
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
+  )
+}
+
+async function permissionsLookGranted() {
+  if (!navigator.permissions?.query) return false
+  try {
+    const [cam, mic] = await Promise.all([
+      navigator.permissions.query({ name: 'camera' }),
+      navigator.permissions.query({ name: 'microphone' }),
+    ])
+    return cam.state === 'granted' && mic.state === 'granted'
+  } catch {
+    return false
+  }
+}
+
+async function inspectPermissionStates() {
+  if (!navigator.permissions?.query) {
+    return { camera: 'unknown', microphone: 'unknown' }
+  }
+  try {
+    const [cam, mic] = await Promise.all([
+      navigator.permissions.query({ name: 'camera' }),
+      navigator.permissions.query({ name: 'microphone' }),
+    ])
+    return { camera: cam.state, microphone: mic.state }
+  } catch {
+    return { camera: 'unknown', microphone: 'unknown' }
+  }
+}
+
+function permissionAccessHint(states, fromUserGesture) {
+  if (states.camera === 'denied' || states.microphone === 'denied') {
+    return 'Camera or mic blocked — allow in browser site settings (lock icon in address bar).'
+  }
+  if (fromUserGesture) {
+    return 'Tap again and press Allow when the browser asks.'
+  }
+  return 'Tap anywhere to allow camera, mic & location.'
 }
 
 async function applyTrackZoom(track, factor) {
@@ -140,8 +236,19 @@ async function applyTrackTorch(track, enabled) {
       await track.applyConstraints({ advanced: [{ torch: enabled }] })
       return true
     }
+    if (caps?.fillLightMode?.includes?.('flash')) {
+      await track.applyConstraints({
+        advanced: [{ fillLightMode: enabled ? 'flash' : 'off' }],
+      })
+      return true
+    }
   } catch (error) {
-    console.warn('[Camera] torch failed:', error)
+    try {
+      await track.applyConstraints({ torch: enabled })
+      return true
+    } catch {
+      console.warn('[Camera] torch failed:', error)
+    }
   }
   return false
 }
@@ -179,36 +286,59 @@ function applyMyraVoice(utterance, voiceRef) {
   }
 }
 
-function IntroLoadingScreen({ onReady, handoff }) {
-  const [progress, setProgress] = useState(0)
-  const readyFiredRef = useRef(false)
+function IntroLoadingScreen({
+  handoff,
+  startupAccess,
+  startupAccessHint,
+  onAssetsReady,
+  onAutoRequestAccess,
+  onGrantAccess,
+}) {
+  const [loadProgress, setLoadProgress] = useState(0)
+  const assetsReadyRef = useRef(false)
+  const autoRequestedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
-    const startedAt = performance.now()
 
-    const animateProgress = () => {
-      if (cancelled) return
-      const elapsed = performance.now() - startedAt
-      const pct = Math.min(100, (elapsed / INTRO_LOADING_MIN_MS) * 100)
-      setProgress(pct)
-      if (pct < 100) {
-        requestAnimationFrame(animateProgress)
-      } else if (!readyFiredRef.current) {
-        readyFiredRef.current = true
-        window.setTimeout(() => onReady?.(), 420)
-      }
-    }
+    loadAxeraiExperienceAssets({
+      onProgress: (pct) => {
+        if (!cancelled) setLoadProgress(pct)
+      },
+    })
+      .then(() => {
+        if (cancelled || assetsReadyRef.current) return
+        assetsReadyRef.current = true
+        setLoadProgress(100)
+        onAssetsReady?.()
+      })
+      .catch((error) => {
+        console.error('[Axerai] asset preload failed', error)
+        if (cancelled || assetsReadyRef.current) return
+        assetsReadyRef.current = true
+        setLoadProgress(100)
+        onAssetsReady?.()
+      })
 
-    requestAnimationFrame(animateProgress)
     return () => {
       cancelled = true
     }
-  }, [onReady])
+  }, [onAssetsReady])
+
+  useEffect(() => {
+    if (loadProgress < 80 || autoRequestedRef.current) return
+    autoRequestedRef.current = true
+    onAutoRequestAccess?.()
+  }, [loadProgress, onAutoRequestAccess])
+
+  const needsManualAccess =
+    startupAccess === 'prompt' ||
+    startupAccess === 'denied' ||
+    startupAccess === 'blocked'
 
   return (
     <div
-      className={`intro-loading${handoff ? ' intro-loading--handoff' : ''}${progress >= 100 ? ' intro-loading--complete' : ''}`}
+      className={`intro-loading${handoff ? ' intro-loading--handoff' : ''}${loadProgress >= 100 ? ' intro-loading--complete' : ''}${needsManualAccess ? ' intro-loading--access' : ''}`}
       role="status"
       aria-live="polite"
       aria-label="Loading Richera experience"
@@ -221,27 +351,62 @@ function IntroLoadingScreen({ onReady, handoff }) {
           <p className="intro-loading__credit">powered by axerai</p>
           <div className="intro-loading__bar" aria-hidden>
             <div className="intro-loading__bar-track">
-              <div className="intro-loading__bar-fill" style={{ width: `${progress}%` }} />
+              <div className="intro-loading__bar-fill" style={{ width: `${loadProgress}%` }} />
             </div>
           </div>
         </div>
+
+        {needsManualAccess ? (
+          <>
+            {startupAccessHint ? (
+              <p className="intro-access-hint" role="status">
+                {startupAccessHint}
+              </p>
+            ) : null}
+            <span className="intro-access-tap-ring" aria-hidden />
+            <button
+              type="button"
+              className={`intro-access-tap${startupAccess === 'denied' || startupAccess === 'blocked' ? ' intro-access-tap--retry' : ''}`}
+              aria-label="Allow camera, microphone, and location"
+              disabled={startupAccess === 'granting'}
+              onClick={onGrantAccess}
+            />
+          </>
+        ) : null}
       </div>
     </div>
   )
 }
 
-function IntroShell({ onExitStart, onExitComplete }) {
+function IntroShell({
+  onExitStart,
+  onExitComplete,
+  readyToEnter,
+  startupAccess,
+  startupAccessHint,
+  onAssetsReady,
+  onAutoRequestAccess,
+  onGrantAccess,
+}) {
   const [handoff, setHandoff] = useState(false)
 
-  const handleLoadingComplete = useCallback(() => {
+  useEffect(() => {
+    if (!readyToEnter || handoff) return
     setHandoff(true)
     onExitStart?.()
-    window.setTimeout(() => onExitComplete?.(), 900)
-  }, [onExitStart, onExitComplete])
+    window.setTimeout(() => onExitComplete?.(), 480)
+  }, [readyToEnter, handoff, onExitStart, onExitComplete])
 
   return (
     <div className="intro-shell">
-      <IntroLoadingScreen handoff={handoff} onReady={handleLoadingComplete} />
+      <IntroLoadingScreen
+        handoff={handoff}
+        startupAccess={startupAccess}
+        startupAccessHint={startupAccessHint}
+        onAssetsReady={onAssetsReady}
+        onAutoRequestAccess={onAutoRequestAccess}
+        onGrantAccess={onGrantAccess}
+      />
     </div>
   )
 }
@@ -332,9 +497,46 @@ function softTeardownMindAR(mindarThree, keepCameraAlive) {
   }
 }
 
-function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, showMyra, isTalking }) {
+function MindARSession({
+  previewStream,
+  cameraProfile,
+  onReleasePreview,
+  onError,
+  onSessionReady,
+  onTargetVideoEnded,
+  onCardTracked,
+  playTargetVideo = true,
+  showMyra,
+  isTalking,
+}) {
   const containerRef = useRef(null)
   const [anchorGroup, setAnchorGroup] = useState(null)
+  const [targetVideoPlaying, setTargetVideoPlaying] = useState(false)
+  const showMyraRef = useRef(showMyra)
+  const mindarVideoRef = useRef(null)
+
+  useEffect(() => {
+    showMyraRef.current = showMyra
+  }, [showMyra])
+  const videoPhaseActiveRef = useRef(true)
+  const cardTrackHandlerRef = useRef(onCardTracked)
+
+  useEffect(() => {
+    cardTrackHandlerRef.current = onCardTracked
+  }, [onCardTracked])
+
+  const getMindarVideo = useCallback(() => {
+    const video = mindarVideoRef.current
+    if (video && video.videoWidth > 0) return video
+    const host = containerRef.current
+    const fallback = host?.querySelector('video')
+    if (fallback && fallback.videoWidth > 0) return fallback
+    return null
+  }, [])
+
+  const notifyCardTracked = useCallback((phase) => {
+    cardTrackHandlerRef.current?.(phase, getMindarVideo)
+  }, [getMindarVideo])
 
   useEffect(() => {
     const container = containerRef.current
@@ -347,6 +549,7 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
     let keepCameraAlive = Boolean(previewStream?.active)
     const sessionGen = { id: 0 }
     sessionGen.id = Math.random()
+    const enableTargetVideo = playTargetVideo
 
     async function startMindAR() {
       const mySession = sessionGen.id
@@ -369,16 +572,42 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
         const { renderer, scene, camera } = mindarThree
         const anchor = mindarThree.addAnchor(0)
 
-        disposeTargetVideo = mountTargetAnchorVideo({
-          anchor,
-          anchorGroup: anchor.group,
-          onEnded: () => {
+        const attachCardTrackHandler = () => {
+          const previous = anchor.onTargetFound
+          anchor.onTargetFound = () => {
+            previous?.()
             if (!active || sessionGen.id !== mySession) return
-            disposeTargetVideo?.()
-            disposeTargetVideo = null
-            onTargetVideoEnded?.()
-          },
-        })
+            const phase = videoPhaseActiveRef.current ? 'video' : 'card'
+            notifyCardTracked(phase)
+          }
+        }
+
+        if (enableTargetVideo) {
+          videoPhaseActiveRef.current = true
+          disposeTargetVideo = mountTargetAnchorVideo({
+            anchor,
+            anchorGroup: anchor.group,
+            onCardTracked: () => {
+              if (!active || sessionGen.id !== mySession) return
+              setTargetVideoPlaying(true)
+              notifyCardTracked('video')
+            },
+            onEnded: () => {
+              if (!active || sessionGen.id !== mySession) return
+              videoPhaseActiveRef.current = false
+              const wrapper = anchor.group?.userData?.wrapper
+              if (wrapper && showMyraRef.current) wrapper.visible = true
+              setTargetVideoPlaying(false)
+              disposeTargetVideo?.()
+              disposeTargetVideo = null
+              attachCardTrackHandler()
+              onTargetVideoEnded?.()
+            },
+          })
+        } else {
+          videoPhaseActiveRef.current = false
+          attachCardTrackHandler()
+        }
 
         if (!active) return
         setAnchorGroup(anchor.group)
@@ -406,6 +635,7 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
         if (!active || sessionGen.id !== mySession) return
 
         const mindarVideo = mindarThree.video || container.querySelector('video')
+        mindarVideoRef.current = mindarVideo
         if (!mindarVideo || mindarVideo.videoWidth === 0) {
           throw new Error('MindAR camera feed is not ready')
         }
@@ -453,13 +683,15 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
     return () => {
       sessionGen.id = 0
       active = false
+      setTargetVideoPlaying(false)
       disposeTargetVideo?.()
       disposeTargetVideo = null
       setAnchorGroup(null)
+      mindarVideoRef.current = null
       softTeardownMindAR(mindarThree, keepCameraAlive)
       if (container) container.replaceChildren()
     }
-  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded])
+  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked])
 
   return (
     <div
@@ -471,11 +703,12 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
         className="mindar-host absolute inset-0 h-full w-full overflow-hidden"
       />
 
-      {anchorGroup && showMyra ? (
+      {anchorGroup && (showMyra || targetVideoPlaying) ? (
         <MyraModel
           key={MYRA_MODEL_PATH}
           anchorGroup={anchorGroup}
           isTalking={isTalking}
+          revealed={showMyra && !targetVideoPlaying}
         />
       ) : null}
     </div>
@@ -484,27 +717,6 @@ function MindARSession({ previewStream, cameraProfile, onReleasePreview, onError
 
 /** Ledger + backend always use this one code for the RICHERA product. */
 const VERIFICATION_CODE = 'R'
-/** OCR may read only part of the card — every fragment maps to VERIFICATION_CODE. */
-const RICHERA_SCAN_FRAGMENTS = ['RICHERA', 'RICH', 'RIC', 'RI', 'RA', 'CH']
-const FALLBACK_WELCOME_SPEECH =
-  'Arrey finally! Lagta hai crystal ne mujhe jagaa diya. Main Myra hoon... Richira se aayi hoon tumse milne. Pehle ye batao, aaj ka scene kya hai?'
-
-function compactOcrText(text) {
-  return String(text ?? '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-}
-
-function matchBrandFromOcr(text) {
-  const compact = compactOcrText(text)
-  if (!compact) return null
-
-  for (const fragment of RICHERA_SCAN_FRAGMENTS) {
-    if (compact.includes(fragment)) return VERIFICATION_CODE
-  }
-
-  return null
-}
 
 function drawVideoFrameToCanvas(video, { centerCropFactor = 1 } = {}) {
   const vw = video.videoWidth
@@ -529,60 +741,50 @@ function drawVideoFrameToCanvas(video, { centerCropFactor = 1 } = {}) {
   return canvas
 }
 
-function preprocessCanvasForOcr(sourceCanvas) {
-  const scale = Math.min(2.5, 2400 / Math.max(sourceCanvas.width, 1))
-  const w = Math.max(1, Math.round(sourceCanvas.width * scale))
-  const h = Math.max(1, Math.round(sourceCanvas.height * scale))
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
+async function recognizeProductFromFrame(sourceCanvas) {
+  const imageDataUrl = sourceCanvas.toDataURL('image/jpeg', 0.85)
+  const result = await verifyRicheraProduct(imageDataUrl)
 
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return sourceCanvas
-
-  ctx.drawImage(sourceCanvas, 0, 0, w, h)
-  const imageData = ctx.getImageData(0, 0, w, h)
-  const data = imageData.data
-
-  for (let i = 0; i < data.length; i += 4) {
-    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-    const contrast = Math.min(255, Math.max(0, (gray - 128) * 1.6 + 128))
-    const value = contrast > 145 ? 255 : contrast < 110 ? 0 : contrast
-    data[i] = value
-    data[i + 1] = value
-    data[i + 2] = value
+  if (result.usage) {
+    void recordGeminiUsage({
+      callType: 'verify',
+      model: result.model,
+      promptTokens: result.usage.promptTokens,
+      outputTokens: result.usage.outputTokens,
+      totalTokens: result.usage.totalTokens,
+      verificationCode: result.verificationCode ?? 'R',
+    })
   }
 
-  ctx.putImageData(imageData, 0, 0)
-  return canvas
+  if (result.verified) {
+    console.info('[Scan] 3-layer verify: REAL →', result.verificationCode)
+  } else {
+    console.warn('[Scan] 3-layer verify fail:', result.failReason)
+  }
+  return result
 }
 
-async function recognizeProductFromFrame(sourceCanvas) {
-  const passes = [
-    sourceCanvas.toDataURL('image/png'),
-    preprocessCanvasForOcr(sourceCanvas).toDataURL('image/png'),
-  ]
-
-  let combinedText = ''
-  for (const imageData of passes) {
-    const { data } = await Tesseract.recognize(imageData, 'eng')
-    combinedText += `\n${data.text}`
-    const code = matchBrandFromOcr(combinedText)
-    if (code) {
-      console.info('[Scan] product matched:', code, combinedText.slice(0, 240))
-      return { verified: true, verificationCode: code, ocrText: combinedText }
-    }
+function verifyFailSituation(failReason) {
+  if (failReason === VERIFY_FAIL_REASON.PHOTO_SPOOF) {
+    return MYRA_ERROR_SITUATIONS.SCAN_PHOTO_SPOOF
   }
-
-  console.warn('[Scan] product not found in OCR:', combinedText.slice(0, 320))
-  return { verified: false, verificationCode: null, ocrText: combinedText }
+  if (failReason === VERIFY_FAIL_REASON.BAD_FRAME) {
+    return MYRA_ERROR_SITUATIONS.SCAN_BAD_FRAME
+  }
+  return MYRA_ERROR_SITUATIONS.SCAN_CARD_NOT_FOUND
 }
 
 async function persistHistoryEntry(role, text) {
-  appendMyraHistory(role, text)
-  if (isLedgerConfigured()) {
-    await appendLedgerMessage(role, text)
+  if (!isLedgerConfigured()) return
+  let body =
+    role === 'myra' ? prepareMyraLedgerText(text) : String(text ?? '').trim()
+  if (!body) return
+
+  if (role === 'myra' && isOfflineMyraFallback(body)) {
+    return
   }
+
+  await appendLedgerMessage(role, body)
 }
 
 function geminiErrorText(error) {
@@ -671,9 +873,17 @@ function App() {
   const myraVoiceRef = useRef(null)
   const liveContextRef = useRef(null)
   const scanSnapshotRef = useRef(null)
+  const verifyGenerationRef = useRef(0)
+  const verifyFailCountRef = useRef(0)
+  const scanSnapInFlightRef = useRef(false)
+  const isVerifiedRef = useRef(false)
+  const targetVideoDoneRef = useRef(false)
   const endExperienceRef = useRef(null)
+  const restartingScanRef = useRef(false)
   const micStreamRef = useRef(null)
   const startupPermissionsDoneRef = useRef(false)
+  const assetsReadyRef = useRef(false)
+  const autoAccessAttemptedRef = useRef(false)
   const liveMicRecognitionRef = useRef(null)
   const liveMicAnalyserRef = useRef(null)
   const liveMicAudioCtxRef = useRef(null)
@@ -686,25 +896,31 @@ function App() {
   const liveMicLastVoiceAtRef = useRef(0)
   const liveMicPendingInterimRef = useRef(false)
   const composeModeRef = useRef(null)
+  const torchOnRef = useRef(false)
+  const viewportTapRef = useRef(0)
   const sendMyraUserMessageRef = useRef(() => {})
   const startLiveMicModeRef = useRef(async () => false)
 
   const [introVisible, setIntroVisible] = useState(true)
   const [mainRevealed, setMainRevealed] = useState(false)
+  const [startupAccess, setStartupAccess] = useState('loading')
+  const [startupAccessHint, setStartupAccessHint] = useState(null)
+  const [introReadyToEnter, setIntroReadyToEnter] = useState(false)
   const [devices, setDevices] = useState([])
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [cameraFacing, setCameraFacing] = useState('environment')
+  const [cameraInitReady, setCameraInitReady] = useState(false)
   const [cameraError, setCameraError] = useState(null)
-  const [scanToast, setScanToast] = useState(null)
   const [isVerified, setIsVerified] = useState(false)
   const [showMindAR, setShowMindAR] = useState(false)
   const [arError, setArError] = useState(null)
-  const [isScanning, setIsScanning] = useState(false)
   const [videoReady, setVideoReady] = useState(false)
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [isMyraTalking, setisMyraTalking] = useState(false)
   const [mindarReady, setMindarReady] = useState(false)
+  const [showScanGuide, setShowScanGuide] = useState(false)
+  const [experienceViewMode, setExperienceViewMode] = useState('ar')
   const [targetVideoDone, setTargetVideoDone] = useState(false)
   const [arPreviewStream, setArPreviewStream] = useState(null)
   const [arCameraProfile, setArCameraProfile] = useState(null)
@@ -712,6 +928,8 @@ function App() {
   const [composeText, setComposeText] = useState('')
   const [userImagePreview, setUserImagePreview] = useState(null)
   const [composeMode, setComposeMode] = useState(null)
+  const [torchOn, setTorchOn] = useState(false)
+  const [torchSupported, setTorchSupported] = useState(false)
   const [liveTranscript, setLiveTranscript] = useState('')
   const [voiceLevels, setVoiceLevels] = useState(() => Array(12).fill(0.15))
   const userImageRef = useRef(null)
@@ -732,6 +950,123 @@ function App() {
   const handleIntroExitComplete = useCallback(() => {
     setIntroVisible(false)
   }, [])
+
+  const loadDevices = useCallback(async () => {
+    const all = await navigator.mediaDevices.enumerateDevices()
+    const videoInputs = all.filter((device) => device.kind === 'videoinput')
+    setDevices(videoInputs)
+    return videoInputs
+  }, [])
+
+  const grantStartupAccess = useCallback(async () => {
+    requestGeolocationInBackground()
+    primeMobileAudio()
+
+    const stream = await acquireStartupStream()
+    streamRef.current = stream
+
+    const videoInputs = await loadDevices()
+    const backId = pickBackCameraId(videoInputs)
+    if (backId) {
+      setSelectedDeviceId(backId)
+      setCameraFacing('environment')
+    } else {
+      setSelectedDeviceId('')
+      setCameraFacing('user')
+    }
+
+    startupPermissionsDoneRef.current = true
+    setCameraError(null)
+    setCameraInitReady(true)
+    return true
+  }, [loadDevices])
+
+  const beginIntroExit = useCallback(() => {
+    setIntroReadyToEnter(true)
+  }, [])
+
+  const maybeEnterExperience = useCallback(() => {
+    if (!assetsReadyRef.current || !startupPermissionsDoneRef.current) return
+    setStartupAccess('ready')
+    beginIntroExit()
+  }, [beginIntroExit])
+
+  const requestStartupPermissions = useCallback(
+    async ({ fromUserGesture = false } = {}) => {
+      if (startupPermissionsDoneRef.current) {
+        maybeEnterExperience()
+        return true
+      }
+
+      setStartupAccess('granting')
+      setStartupAccessHint(null)
+      try {
+        await grantStartupAccess()
+        setStartupAccess('ready')
+        setStartupAccessHint(null)
+        maybeEnterExperience()
+        return true
+      } catch (error) {
+        const states = await inspectPermissionStates()
+        const blocked = states.camera === 'denied' || states.microphone === 'denied'
+        if (blocked) {
+          setStartupAccess('blocked')
+        } else if (fromUserGesture) {
+          setStartupAccess('denied')
+        } else {
+          setStartupAccess('prompt')
+        }
+        setStartupAccessHint(permissionAccessHint(states, fromUserGesture))
+        if (fromUserGesture || blocked) {
+          console.warn('[Axerai] Startup permissions failed:', error)
+        } else {
+          console.debug('[Axerai] Auto permission needs tap — browser requires user gesture.')
+        }
+        return false
+      }
+    },
+    [grantStartupAccess, maybeEnterExperience],
+  )
+
+  const handleAutoRequestAccess = useCallback(async () => {
+    if (autoAccessAttemptedRef.current || startupPermissionsDoneRef.current) return
+    autoAccessAttemptedRef.current = true
+
+    if (await permissionsLookGranted()) {
+      await requestStartupPermissions({ fromUserGesture: false })
+      return
+    }
+
+    await requestStartupPermissions({ fromUserGesture: false })
+  }, [requestStartupPermissions])
+
+  const handleAssetsReady = useCallback(async () => {
+    if (assetsReadyRef.current) return
+    assetsReadyRef.current = true
+
+    void fetchLiveContext()
+      .then((ctx) => {
+        liveContextRef.current = ctx
+      })
+      .catch((error) => {
+        console.warn('[Axerai] Live context prefetch failed:', error)
+      })
+
+    if (startupPermissionsDoneRef.current) {
+      maybeEnterExperience()
+      return
+    }
+
+    if (!autoAccessAttemptedRef.current) {
+      await handleAutoRequestAccess()
+    }
+
+    maybeEnterExperience()
+  }, [handleAutoRequestAccess, maybeEnterExperience])
+
+  const handleGrantAccess = useCallback(async () => {
+    await requestStartupPermissions({ fromUserGesture: true })
+  }, [requestStartupPermissions])
 
   // --- GEMINI MYRA AI LOGIC ---
   const clearJarvisSpeechTimer = useCallback(() => {
@@ -830,6 +1165,7 @@ function App() {
     setUserImagePreview(null)
     setComposeMode(null)
     setLiveTranscript('')
+    setTorchOn(false)
     const track = streamRef.current?.getVideoTracks()[0] ?? null
     applyTrackTorch(track, false).catch(() => {})
     try {
@@ -904,21 +1240,59 @@ function App() {
     speakWithBrowserTts(speechText, onDone, startTalkingAnimation)
   }, [speakWithBrowserTts])
 
-  const askGemini = useCallback(async (userPrompt, _imageDataUrl = null) => {
+  /** Scripted error lines — Myra speaks unless situation is in MYRA_ERROR_SILENT. */
+  const speakMyraErrorLine = useCallback(
+    (situation, onDone) => {
+      if (!shouldSpeakMyraError(situation)) {
+        console.info('[Myra] offline silent:', situation, '—', getMyraErrorTriggerNote(situation))
+        setIsAiThinking(false)
+        onDone?.()
+        return
+      }
+      const line = pickMyraErrorLine(situation)
+      console.info('[Myra] offline:', situation, '—', getMyraErrorTriggerNote(situation))
+      setIsAiThinking(true)
+      speakMyraReply(line, onDone)
+    },
+    [speakMyraReply],
+  )
+
+function mapGeminiCallType(reason) {
+  const text = String(reason ?? '').toLowerCase()
+  if (text.includes('welcome') || text.includes('boot') || text.includes('resume')) {
+    return 'welcome'
+  }
+  return 'chat'
+}
+
+  const askGemini = useCallback(async (userPrompt, options = {}) => {
+    const { imageDataUrl = null, models = MYRA_CHAT_LITE_CHAIN, tier = 'lite', reason = '' } = options
     const imagePart =
-      GEMINI_VISION_ENABLED && _imageDataUrl ? parseDataUrl(_imageDataUrl) : null
+      GEMINI_VISION_ENABLED && imageDataUrl ? parseDataUrl(imageDataUrl) : null
+
+    console.info(`[Gemini] Myra chat tier=${tier} reason=${reason || 'default'} chain=${models.join(' → ')}`)
 
     if (USE_API_PROXY) {
-      return askGeminiViaProxy({
+      const payload = await askGeminiViaProxy({
         userPrompt,
         systemInstruction: MYRA_SYSTEM_PROMPT,
-        models: GEMINI_MODELS,
+        models,
         imagePart,
         generationConfig: {
-          temperature: 1.15,
-          topP: 0.95,
+          temperature: 0.9,
+          topP: 0.92,
         },
       })
+
+      void recordGeminiUsage({
+        callType: mapGeminiCallType(reason),
+        model: payload.model,
+        promptTokens: payload.usage.promptTokens,
+        outputTokens: payload.usage.outputTokens,
+        totalTokens: payload.usage.totalTokens,
+      })
+
+      return payload.text
     }
 
     const parts = []
@@ -939,8 +1313,8 @@ function App() {
 
     let lastError = null
 
-    for (let modelIndex = 0; modelIndex < GEMINI_MODELS.length; modelIndex += 1) {
-      const modelName = GEMINI_MODELS[modelIndex]
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+      const modelName = models[modelIndex]
       const isFallback = modelIndex > 0
 
       if (imagePart) {
@@ -956,8 +1330,8 @@ function App() {
             model: modelName,
             systemInstruction: MYRA_SYSTEM_PROMPT,
             generationConfig: {
-              temperature: 1.15,
-              topP: 0.95,
+              temperature: 0.9,
+              topP: 0.92,
             },
           })
 
@@ -966,6 +1340,15 @@ function App() {
           for await (const chunk of result.stream) {
             fullResponse += chunk.text()
           }
+
+          const usage = usageFromResponse(await result.response)
+          void recordGeminiUsage({
+            callType: mapGeminiCallType(reason),
+            model: modelName,
+            promptTokens: usage.promptTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+          })
 
           if (isFallback || attempt > 1) {
             console.log(`[Gemini] OK — ${modelName}${attempt > 1 ? ` (retry ${attempt})` : ''}`)
@@ -1070,7 +1453,10 @@ function App() {
 
   const sendMyraUserMessage = useCallback(
     async (userText, { cycleId, imageDataUrl } = {}) => {
-      if (!isGeminiConfigured()) return
+      if (!isGeminiConfigured()) {
+        speakMyraErrorLine(MYRA_ERROR_SITUATIONS.CHAT_CONNECTION_WEAK, resumeMicAfterGemini)
+        return
+      }
       const trimmed = String(userText).trim()
       const image = imageDataUrl || null
       if (!trimmed && !image) return
@@ -1109,20 +1495,33 @@ function App() {
           sessionRole: getSessionRole(),
         })
 
-        const fullResponse = await askGemini(prompt)
+        const turnCount = getMyraChatTurnCount()
+        const route = resolveMyraChatModels({ userText: trimmed, userTurnCount: turnCount })
+
+        const fullResponse = await askGemini(prompt, {
+          imageDataUrl: image,
+          models: route.models,
+          tier: route.tier,
+          reason: route.reason,
+        })
+        incrementMyraChatTurn()
         const cleanResponse = prepareMyraSpeechText(fullResponse)
 
-        await persistHistoryEntry('myra', cleanResponse)
+        await persistHistoryEntry('myra', fullResponse)
         console.log('[Jarvis] Myra says:', cleanResponse)
         deliverMyraGeminiResponse(fullResponse, resumeMicAfterGemini)
       } catch (error) {
         console.error('[Jarvis] Gemini AI error:', error)
-        resumeMicAfterGemini()
+        speakMyraErrorLine(
+          classifyGeminiError(error, MYRA_ERROR_PHASE.CHAT),
+          resumeMicAfterGemini,
+        )
       }
     },
     [
       askGemini,
       pauseMicForGemini,
+      speakMyraErrorLine,
       resumeMicAfterGemini,
       deliverMyraGeminiResponse,
       clearJarvisSpeechTimer,
@@ -1171,7 +1570,7 @@ function App() {
       setUserImagePreview(compressed)
     } catch (error) {
       console.error('[Jarvis] Image upload failed:', error)
-      setScanToast({ type: 'error', message: "Couldn't load photo" })
+      speakMyraErrorLine(MYRA_ERROR_SITUATIONS.PHOTO_FAIL)
     }
   }, [])
 
@@ -1542,11 +1941,8 @@ function App() {
     }
 
     console.warn('[Jarvis] PTT: no speech detected')
-    setScanToast({
-      type: 'error',
-      message: 'No speech detected',
-    })
-  }, [sendMyraUserMessage])
+    speakMyraErrorLine(MYRA_ERROR_SITUATIONS.NO_SPEECH)
+  }, [sendMyraUserMessage, speakMyraErrorLine])
 
   const attachPttReleaseListeners = useCallback(() => {
     if (pttEndListenerRef.current) return
@@ -1681,16 +2077,14 @@ function App() {
         pttHoldingRef.current = false
         setIsListening(false)
         detachPttReleaseListeners()
-        setScanToast({
-          type: 'error',
-          message: 'Microphone unavailable — refresh and try again',
-        })
+        speakMyraErrorLine(MYRA_ERROR_SITUATIONS.MIC_BLOCKED)
       }
     },
     [
       isAiThinking,
       isMyraTalking,
       prepareJarvisMode,
+      speakMyraErrorLine,
       startPushToTalkRecognition,
       attachPttReleaseListeners,
       detachPttReleaseListeners,
@@ -1744,21 +2138,28 @@ function App() {
     stopElevenLabsSpeech()
     setIsAiThinking(true)
 
+    const afterWelcomeSpeech = async () => {
+      const ready = await prepareJarvisMode()
+      if (!ready) return
+      setComposeMode('liveMic')
+      composeModeRef.current = 'liveMic'
+      await startLiveMicMode()
+    }
+
     const finishWelcome = async (text) => {
       markBootComplete()
-      const cleanText = prepareMyraSpeechText(text)
-      await persistHistoryEntry('myra', cleanText)
-      deliverMyraGeminiResponse(text, async () => {
-        const ready = await prepareJarvisMode()
-        if (!ready) return
-        setComposeMode('liveMic')
-        composeModeRef.current = 'liveMic'
-        await startLiveMicMode()
-      })
+      await persistHistoryEntry('myra', text)
+      deliverMyraGeminiResponse(text, afterWelcomeSpeech)
+    }
+
+    const finishWelcomeError = (situation) => {
+      markBootComplete()
+      const line = pickMyraErrorLine(situation)
+      deliverMyraGeminiResponse(line, afterWelcomeSpeech)
     }
 
     if (!isGeminiConfigured()) {
-      await finishWelcome(FALLBACK_WELCOME_SPEECH)
+      finishWelcomeError(MYRA_ERROR_SITUATIONS.WELCOME_MAGIC_OFF)
       return
     }
 
@@ -1781,14 +2182,20 @@ function App() {
         sessionRole: getSessionRole(),
       })
 
-      const fullResponse = await askGemini(prompt)
+      const welcomeRoute = resolveMyraChatModels({ forceFlash: true })
+
+      const fullResponse = await askGemini(prompt, {
+        models: welcomeRoute.models,
+        tier: welcomeRoute.tier,
+        reason: welcomeRoute.reason,
+      })
       const cleanResponse = prepareMyraSpeechText(fullResponse)
       console.log(`[Jarvis] Myra ${isReturnScan ? 'resume' : 'welcome'}:`, cleanResponse)
       await finishWelcome(fullResponse)
     } catch (error) {
       console.error('[Jarvis] Welcome Gemini error:', error)
       setIsAiThinking(false)
-      await finishWelcome(FALLBACK_WELCOME_SPEECH)
+      finishWelcomeError(classifyGeminiError(error, MYRA_ERROR_PHASE.WELCOME))
     }
   }, [askGemini, deliverMyraGeminiResponse, prepareJarvisMode, startLiveMicMode])
 
@@ -1815,6 +2222,18 @@ function App() {
     setVideoReady(false)
   }
 
+  function stopAllCameraStreams() {
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    arStreamRef.current?.getTracks().forEach((track) => track.stop())
+    arStreamRef.current = null
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+    setVideoReady(false)
+    setTorchOn(false)
+  }
+
   function clearMindARDelay() {
     if (mindarDelayRef.current) {
       clearTimeout(mindarDelayRef.current)
@@ -1822,11 +2241,14 @@ function App() {
     }
   }
 
-  function scheduleMindAR() {
+  function scheduleMindAR(force = false) {
+    if (!force && experienceViewMode !== 'ar') return
     clearMindARDelay()
+    const stream = streamRef.current
+    if (!stream?.active) return
+
     mindarReadyRef.current = false
     setMindarReady(false)
-    const stream = streamRef.current
     arStreamRef.current = stream
     setArPreviewStream(stream)
     setArCameraProfile(resolveMindARCameraFromStream(stream, cameraFacing))
@@ -1847,6 +2269,9 @@ function App() {
     setVideoReady(false)
     mindarReadyRef.current = true
     setMindarReady(true)
+    if (!isVerifiedRef.current) {
+      setShowScanGuide(true)
+    }
   }, [])
 
   const handleMindARError = useCallback((message) => {
@@ -1865,25 +2290,115 @@ function App() {
 
   const handleTargetVideoEnded = useCallback(() => {
     setTargetVideoDone(true)
+    targetVideoDoneRef.current = true
+    if (!isVerifiedRef.current) return
     if (spokeForScanRef.current) return
     spokeForScanRef.current = true
     speakMyraWelcome()
   }, [speakMyraWelcome])
 
-  const endExperience = useCallback(() => {
-    void finishLedgerScan()
+  const completeVerification = useCallback(
+    async (verificationCode) => {
+      if (isLedgerConfigured()) {
+        await prefetchLedgerMemory(verificationCode)
+        const ledgerScan = await startLedgerScan(verificationCode)
+        if (!ledgerScan) {
+          speakMyraErrorLine(MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL)
+        } else {
+          console.info('[Ledger] session', getLedgerSessionInfo())
+        }
+      } else {
+        console.warn('[Ledger] Keys missing — this scan will not be saved.')
+      }
+
+      resetMyraChatTurns()
+      resetMyraErrorLineMemory()
+      scanSnapshotRef.current = null
+
+      setIsVerified(true)
+      isVerifiedRef.current = true
+      setShowScanGuide(false)
+      setArError(null)
+
+      if (targetVideoDoneRef.current && !spokeForScanRef.current) {
+        spokeForScanRef.current = true
+        speakMyraWelcome()
+      }
+    },
+    [speakMyraErrorLine, speakMyraWelcome],
+  )
+
+  const runAnchorVerify = useCallback(
+    async (phase, videoEl) => {
+      if (isVerifiedRef.current) return
+      if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) return
+
+      if (!isGeminiVerifyConfigured()) {
+        speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP)
+        return
+      }
+
+      const gen = ++verifyGenerationRef.current
+      scanSnapInFlightRef.current = true
+      setShowScanGuide(false)
+      primeMobileAudio()
+
+      const canvas = drawVideoFrameToCanvas(videoEl)
+      scanSnapshotRef.current = null
+
+      try {
+        const { verified, verificationCode, failReason } = await recognizeProductFromFrame(canvas)
+        if (gen !== verifyGenerationRef.current) return
+
+        if (verified && verificationCode) {
+          verifyFailCountRef.current = 0
+          await completeVerification(verificationCode)
+        } else {
+          verifyFailCountRef.current += 1
+          scanSnapshotRef.current = null
+          setShowScanGuide(true)
+          speakMyraErrorLine(verifyFailSituation(failReason))
+        }
+      } catch (err) {
+        if (gen !== verifyGenerationRef.current) return
+        console.warn('[Verify] anchor snap failed:', err)
+        setShowScanGuide(true)
+        speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_GLITCH)
+      } finally {
+        if (gen === verifyGenerationRef.current) {
+          scanSnapInFlightRef.current = false
+        }
+      }
+    },
+    [completeVerification, speakMyraErrorLine],
+  )
+
+  const handleCardTracked = useCallback(
+    (phase, getVideo) => {
+      const video = typeof getVideo === 'function' ? getVideo() : null
+      if (!video) return
+      void runAnchorVerify(phase, video)
+    },
+    [runAnchorVerify],
+  )
+
+  const endExperience = useCallback(async () => {
+    restartingScanRef.current = true
+    await finishLedgerScan()
     clearMindARDelay()
-    stopStandardVideo()
     setIsVerified(false)
-    setShowMindAR(false)
+    isVerifiedRef.current = false
+    verifyGenerationRef.current += 1
+    verifyFailCountRef.current = 0
+    spokeForScanRef.current = false
     setTargetVideoDone(false)
+    targetVideoDoneRef.current = false
     setMindarReady(false)
     mindarReadyRef.current = false
-    arStreamRef.current = null
+    setShowMindAR(false)
     setArPreviewStream(null)
     setArCameraProfile(null)
     setArError(null)
-    setScanToast(null)
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
     setisMyraTalking(false)
@@ -1894,76 +2409,51 @@ function App() {
     userImageRef.current = null
     setUserImagePreview(null)
     setJarvisUiReady(false)
+    setExperienceViewMode('ar')
     stopJarvisMode()
-  }, [stopJarvisMode])
+    stopAllCameraStreams()
+
+    try {
+      await grantStartupAccess()
+      setCameraError(null)
+      scheduleMindAR(true)
+      setShowScanGuide(true)
+    } catch (error) {
+      setShowScanGuide(false)
+      setCameraError(
+        error instanceof Error ? error.message : 'Could not access camera',
+      )
+    } finally {
+      restartingScanRef.current = false
+    }
+  }, [grantStartupAccess, stopJarvisMode])
 
   useEffect(() => {
     endExperienceRef.current = endExperience
   }, [endExperience])
 
-  async function captureFrame() {
-    if (isScanning) return
-    primeMobileAudio()
-
-    if (isVerified) {
-      endExperience()
-      return
+  useEffect(() => {
+    const saveLedgerOnPageHide = () => {
+      if (!isLedgerScanActive()) return
+      void finishLedgerScan({ fastExit: true })
     }
+    window.addEventListener('pagehide', saveLedgerOnPageHide)
+    return () => window.removeEventListener('pagehide', saveLedgerOnPageHide)
+  }, [])
 
-    const video = videoRef.current
-    if (!video || video.readyState < 2 || video.videoWidth === 0) return
+  useEffect(() => {
+    if (introVisible || !cameraInitReady) return
+    if (showMindAR || restartingScanRef.current) return
+    scheduleMindAR()
+  }, [introVisible, cameraInitReady, showMindAR])
 
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(''))
-
-    const canvas = drawVideoFrameToCanvas(video, { centerCropFactor: 1 })
-
-    setScanToast(null)
-    setIsVerified(false)
-    setShowMindAR(false)
-    setArError(null)
-    clearMindARDelay()
-    spokeForScanRef.current = false
-    setIsScanning(true)
-
-    try {
-      const { verified, verificationCode } = await recognizeProductFromFrame(canvas)
-      if (verified && verificationCode) {
-        if (isLedgerConfigured()) {
-          await prefetchLedgerMemory(verificationCode)
-          const ledgerScan = await startLedgerScan(verificationCode)
-          if (!ledgerScan) {
-            setScanToast({
-              type: 'error',
-              message: 'Scan OK but ledger save failed — Supabase tables check karo (F12 console).',
-            })
-          } else {
-            console.info('[Ledger] session', getLedgerSessionInfo())
-          }
-        } else {
-          console.warn('[Ledger] Keys missing — this scan will not be saved.')
-        }
-
-        setIsVerified(true)
-        setTargetVideoDone(false)
-        setArError(null)
-        scheduleMindAR()
-        scanSnapshotRef.current = null
-      } else {
-        scanSnapshotRef.current = null
-        setIsVerified(false)
-        setShowMindAR(false)
-        setScanToast({ type: 'error', message: 'Product not detected — center the box in frame' })
-      }
-    } catch (err) {
-      setIsVerified(false)
-      setScanToast({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Scan failed',
-      })
-    } finally {
-      setIsScanning(false)
+  useEffect(() => {
+    if (experienceViewMode === 'ar' && showMindAR && !isVerified && !scanSnapInFlightRef.current) {
+      setShowScanGuide(true)
+    } else if (isVerified) {
+      setShowScanGuide(false)
     }
-  }
+  }, [experienceViewMode, showMindAR, isVerified, mindarReady])
 
   const attachCameraToVideo = useCallback(async () => {
     const video = videoRef.current
@@ -1983,6 +2473,63 @@ function App() {
     }
   }, [])
 
+  const retryCamera = useCallback(() => {
+    setCameraError(null)
+    setCameraInitReady(false)
+    startupPermissionsDoneRef.current = false
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    void grantStartupAccess().catch((error) => {
+      setCameraError(
+        error instanceof Error ? error.message : 'Could not access camera',
+      )
+    })
+  }, [grantStartupAccess])
+
+  const restartCameraForAr = useCallback(async () => {
+    stopAllCameraStreams()
+    setArPreviewStream(null)
+    setArCameraProfile(null)
+    setShowMindAR(false)
+    setMindarReady(false)
+    mindarReadyRef.current = false
+
+    try {
+      const stream = await acquireCameraStream(selectedDeviceId, cameraFacing)
+
+      streamRef.current = stream
+      setCameraError(null)
+      await attachCameraToVideo()
+      scheduleMindAR(true)
+    } catch (err) {
+      setVideoReady(false)
+      setCameraError(
+        err instanceof Error ? err.message : 'Could not access camera',
+      )
+    }
+  }, [attachCameraToVideo, cameraFacing, selectedDeviceId])
+
+  const toggleExperienceViewMode = useCallback(() => {
+    if (!isVerified) return
+
+    if (experienceViewMode === 'ar') {
+      clearMindARDelay()
+      setShowMindAR(false)
+      setMindarReady(false)
+      mindarReadyRef.current = false
+      setArPreviewStream(null)
+      setArCameraProfile(null)
+      setArError(null)
+      stopAllCameraStreams()
+      setExperienceViewMode('vr')
+      return
+    }
+
+    setExperienceViewMode('ar')
+    setArError(null)
+    void restartCameraForAr()
+  }, [experienceViewMode, isVerified, restartCameraForAr])
+
   const bindCameraVideo = useCallback(
     (node) => {
       videoRef.current = node
@@ -1991,67 +2538,20 @@ function App() {
     [attachCameraToVideo],
   )
 
-  const loadDevices = useCallback(async () => {
-    const all = await navigator.mediaDevices.enumerateDevices()
-    const videoInputs = all.filter((device) => device.kind === 'videoinput')
-    setDevices(videoInputs)
-    return videoInputs
-  }, [])
-
   useEffect(() => {
-    if (introVisible) return undefined
-
-    let mounted = true
-
-    async function init() {
-      try {
-        await requestStartupPermissions()
-        startupPermissionsDoneRef.current = true
-        primeMobileAudio()
-
-        if (!mounted) return
-
-        const videoInputs = await loadDevices()
-        const backId = pickBackCameraId(videoInputs)
-        if (backId) {
-          setSelectedDeviceId(backId)
-        } else {
-          setSelectedDeviceId('')
-          setCameraFacing('environment')
-        }
-
-        try {
-          const liveContext = await fetchLiveContext()
-          if (mounted) liveContextRef.current = liveContext
-        } catch (error) {
-          console.warn('[Axerai] Live context prefetch failed:', error)
-        }
-      } catch (err) {
-        if (!mounted) return
-        setCameraError(
-          err instanceof Error ? err.message : 'Could not access camera',
-        )
-      }
-    }
-
-    init()
+    if (!introVisible) return undefined
 
     const handleDeviceChange = () => {
-      loadDevices()
+      void loadDevices()
     }
     navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange)
-
     return () => {
-      mounted = false
-      navigator.mediaDevices?.removeEventListener(
-        'devicechange',
-        handleDeviceChange,
-      )
+      navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange)
     }
   }, [introVisible, loadDevices])
 
   useEffect(() => {
-    if (introVisible || isVerified) return
+    if (introVisible || !cameraInitReady) return
 
     let cancelled = false
 
@@ -2061,7 +2561,7 @@ function App() {
       if (
         selectedDeviceId &&
         activeId === selectedDeviceId &&
-        streamRef.current
+        streamRef.current?.active
       ) {
         await attachCameraToVideo()
         return
@@ -2070,22 +2570,7 @@ function App() {
       streamRef.current?.getTracks().forEach((track) => track.stop())
 
       try {
-        let stream
-        const videoConstraints = selectedDeviceId
-          ? { deviceId: { exact: selectedDeviceId } }
-          : { facingMode: { ideal: cameraFacing } }
-
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraints,
-            audio: false,
-          })
-        } catch {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: cameraFacing } },
-            audio: false,
-          })
-        }
+        const stream = await acquireCameraStream(selectedDeviceId, cameraFacing)
 
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop())
@@ -2094,7 +2579,12 @@ function App() {
 
         streamRef.current = stream
         setCameraError(null)
-        await attachCameraToVideo()
+        const attached = await attachCameraToVideo()
+        if (!attached && !cancelled) {
+          window.setTimeout(() => {
+            if (!cancelled) void attachCameraToVideo()
+          }, 120)
+        }
       } catch (err) {
         if (cancelled) return
         setVideoReady(false)
@@ -2109,7 +2599,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedDeviceId, cameraFacing, isVerified, introVisible, attachCameraToVideo])
+  }, [selectedDeviceId, cameraFacing, introVisible, attachCameraToVideo, cameraInitReady])
 
   useEffect(() => {
     if (isVerified) {
@@ -2121,9 +2611,55 @@ function App() {
   const flipCamera = useCallback(async () => {
     const track = streamRef.current?.getVideoTracks()[0] ?? null
     await applyTrackTorch(track, false).catch(() => {})
+    setTorchOn(false)
     setSelectedDeviceId('')
     setCameraFacing((facing) => (facing === 'environment' ? 'user' : 'environment'))
   }, [])
+
+  const getCameraTrack = useCallback(
+    () => streamRef.current?.getVideoTracks()[0] ?? arStreamRef.current?.getVideoTracks()[0] ?? null,
+    [],
+  )
+
+  const toggleTorch = useCallback(async () => {
+    const track = getCameraTrack()
+    if (!track) return
+    const next = !torchOnRef.current
+    const ok = await applyTrackTorch(track, next)
+    if (ok) setTorchOn(next)
+  }, [getCameraTrack])
+
+  const handleViewportDoubleTap = useCallback(() => {
+    const now = Date.now()
+    if (now - viewportTapRef.current < 340) {
+      viewportTapRef.current = 0
+      flipCamera()
+      return
+    }
+    viewportTapRef.current = now
+  }, [flipCamera])
+
+  useEffect(() => {
+    torchOnRef.current = torchOn
+  }, [torchOn])
+
+  useEffect(() => {
+    const track = getCameraTrack()
+    if (!track) {
+      setTorchSupported(false)
+      return
+    }
+    const caps = track.getCapabilities?.()
+    const supported = Boolean(caps?.torch || caps?.fillLightMode?.includes?.('flash'))
+    setTorchSupported(supported)
+    if (!supported) {
+      setTorchOn(false)
+      return
+    }
+    if (torchOnRef.current) {
+      applyTrackTorch(track, true).catch(() => setTorchOn(false))
+    }
+  }, [videoReady, selectedDeviceId, cameraFacing, isVerified, getCameraTrack])
 
   useEffect(() => {
     const turnOffTorch = () => {
@@ -2143,8 +2679,6 @@ function App() {
   }, [mainRevealed, attachCameraToVideo])
 
   useEffect(() => {
-    preloadMyraModels()
-    preloadTargetVideo()
     logAxeraiBuildConfig()
   }, [])
 
@@ -2168,12 +2702,6 @@ function App() {
     window.speechSynthesis?.addEventListener('voiceschanged', syncVoice)
     return () => window.speechSynthesis?.removeEventListener('voiceschanged', syncVoice)
   }, [])
-
-  useEffect(() => {
-    if (!scanToast) return
-    const timer = setTimeout(() => setScanToast(null), 3200)
-    return () => clearTimeout(timer)
-  }, [scanToast])
 
   const myraPttButton = (
     <button
@@ -2253,11 +2781,54 @@ function App() {
     </button>
   )
 
+  const liveMicDockButton = (
+    <button
+      type="button"
+      onClick={() => toggleComposeMode('liveMic')}
+      aria-label="Live microphone"
+      aria-pressed={composeMode === 'liveMic'}
+      className={`hud-icon-btn flex h-10 w-10 items-center justify-center rounded-full${composeMode === 'liveMic' ? ' hud-icon-btn--active' : ''}`}
+    >
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" d="M12 14a3 3 0 003-3V6a3 3 0 10-6 0v5a3 3 0 003 3z" />
+        <path strokeLinecap="round" d="M19 11v1a7 7 0 01-14 0v-1" />
+        <path strokeLinecap="round" d="M12 19v3" />
+        <path strokeLinecap="round" d="M8 21h8" />
+      </svg>
+    </button>
+  )
+
+  const arVrToggleButton = isVerified ? (
+    <button
+      type="button"
+      onClick={toggleExperienceViewMode}
+      aria-label={experienceViewMode === 'ar' ? 'Switch to VR mode' : 'Switch to AR mode'}
+      className={`hud-icon-btn hud-arvr-toggle flex h-10 items-center justify-center rounded-full${experienceViewMode === 'vr' ? ' hud-arvr-toggle--vr' : ''}`}
+    >
+      {experienceViewMode === 'ar' ? 'VR' : 'AR'}
+    </button>
+  ) : null
+
+  const flashButton = (
+    <button
+      type="button"
+      onClick={toggleTorch}
+      disabled={!torchSupported || cameraFacing === 'user'}
+      aria-label={torchOn ? 'Turn flash off' : 'Turn flash on'}
+      aria-pressed={torchOn}
+      className={`hud-icon-btn flex h-10 w-10 items-center justify-center rounded-full${torchOn ? ' hud-icon-btn--active' : ''}`}
+    >
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 2L5 14h6l-1 8 8-12h-6l1-8z" />
+      </svg>
+    </button>
+  )
+
   const cameraFlipButton = (
     <button
       type="button"
-      onClick={flipCamera}
-      aria-label="Flip camera"
+      onDoubleClick={flipCamera}
+      aria-label="Double-click to flip camera"
       className="hud-icon-btn hud-camera-flip flex h-10 w-10 items-center justify-center rounded-full"
     >
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2270,7 +2841,16 @@ function App() {
   return (
     <>
       {introVisible ? (
-        <IntroShell onExitStart={handleIntroExitStart} onExitComplete={handleIntroExitComplete} />
+        <IntroShell
+          onExitStart={handleIntroExitStart}
+          onExitComplete={handleIntroExitComplete}
+          readyToEnter={introReadyToEnter}
+          startupAccess={startupAccess}
+          startupAccessHint={startupAccessHint}
+          onAssetsReady={handleAssetsReady}
+          onAutoRequestAccess={handleAutoRequestAccess}
+          onGrantAccess={handleGrantAccess}
+        />
       ) : null}
 
       <div className={`axerai-app relative flex h-[100dvh] h-[100svh] w-full flex-col overflow-hidden text-white${mainRevealed ? ' main-reveal--active' : ''}${introVisible ? ' axerai-app--during-intro' : ''}`}>
@@ -2282,15 +2862,29 @@ function App() {
 
         <div className="relative z-10 flex h-full min-h-0 w-full flex-col">
           {cameraError ? (
-            <div className="axerai-stage-error rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-center text-sm text-red-200 backdrop-blur-md">
-              {cameraError}
+            <div className="axerai-stage-error mx-4 mt-4 flex flex-col items-center gap-3 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-center text-sm text-red-200 backdrop-blur-md">
+              <p>{cameraError}</p>
+              <button
+                type="button"
+                onClick={retryCamera}
+                className="rounded-full border border-red-300/35 bg-red-950/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-red-100"
+              >
+                Retry camera
+              </button>
             </div>
           ) : null}
 
-          {!cameraError && (
-            <div className="axerai-stage-shell">
+          <div className="axerai-stage-shell">
             <div className="main-reveal-item main-reveal-item--2 hud-viewport hud-viewport--stage relative h-full min-h-0 w-full flex-1">
-              {!mindarReady && (
+              {experienceViewMode === 'ar' && !isVerified ? (
+                <button
+                  type="button"
+                  className="hud-viewport-tap absolute inset-0 z-[3] cursor-default border-0 bg-transparent p-0"
+                  aria-label="Double-tap to flip camera"
+                  onClick={handleViewportDoubleTap}
+                />
+              ) : null}
+              {experienceViewMode === 'ar' && showMindAR && !mindarReady && (
                 <video
                   ref={bindCameraVideo}
                   autoPlay
@@ -2298,10 +2892,19 @@ function App() {
                   muted
                   onLoadedData={() => setVideoReady(true)}
                   onEmptied={() => setVideoReady(false)}
-                  className={`absolute inset-0 h-full w-full bg-black object-cover transition-transform duration-200 ${isVerified ? 'z-[4]' : 'z-[1]'}`}
+                  className="absolute inset-0 z-[1] h-full w-full bg-black object-cover transition-transform duration-200"
                 />
               )}
-              {isVerified && showMindAR && arPreviewStream && arCameraProfile && (
+              {isVerified && experienceViewMode === 'vr' && (
+                <MyraStaticSession
+                  backgroundSrc={INTRO_LOADING_BG}
+                  showMyra
+                  isTalking={isMyraTalking}
+                  playTargetVideo={!targetVideoDone}
+                  onTargetVideoEnded={handleTargetVideoEnded}
+                />
+              )}
+              {experienceViewMode === 'ar' && showMindAR && arPreviewStream && arCameraProfile && (
                 <div
                   className={`absolute inset-0 z-[2] ${mindarReady ? 'opacity-100' : 'opacity-0'}`}
                 >
@@ -2313,20 +2916,24 @@ function App() {
                     onError={handleMindARError}
                     onSessionReady={handleMindARReady}
                     onTargetVideoEnded={handleTargetVideoEnded}
-                    showMyra={targetVideoDone}
+                    onCardTracked={handleCardTracked}
+                    playTargetVideo={!targetVideoDone}
+                    showMyra={isVerified && mindarReady}
                     isTalking={isMyraTalking}
                   />
                 </div>
               )}
-              {isVerified && !mindarReady && (
-                <div className="pointer-events-none absolute inset-0 z-[5] flex items-end justify-center pb-6">
-                  <div className="rounded-full border border-white/15 bg-black/45 px-4 py-2 text-xs text-white/75 backdrop-blur-md">
-                    Starting AR…
+
+              {showScanGuide && experienceViewMode === 'ar' && showMindAR && !isVerified ? (
+                <div className="hud-scan-guide pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex justify-center pb-8">
+                  <div className="hud-scan-guide__card" role="status">
+                    <p className="hud-scan-guide__title">Center the RICHERA card</p>
+                    <p className="hud-scan-guide__copy">Hold it steady in the middle — we&apos;ll scan automatically</p>
                   </div>
                 </div>
-              )}
+              ) : null}
 
-              <div className={`hud-viewport__frame pointer-events-none absolute inset-0 z-[6]${isVerified ? ' hud-viewport__frame--ar' : ''}`} aria-hidden>
+              <div className={`hud-viewport__frame pointer-events-none absolute inset-0 z-[6]${experienceViewMode === 'ar' && showMindAR ? ' hud-viewport__frame--ar' : ''}`} aria-hidden>
                 <span className="hud-corner hud-corner--tl" />
                 <span className="hud-corner hud-corner--tr" />
                 <span className="hud-corner hud-corner--bl" />
@@ -2348,47 +2955,21 @@ function App() {
                     </svg>
                   </button>
                 ) : null}
-                {cameraFlipButton}
-                {isVerified && jarvisUiReady ? keyboardButton : null}
+                {arVrToggleButton}
+                {experienceViewMode === 'ar' ? cameraFlipButton : null}
+                {experienceViewMode === 'ar' ? flashButton : null}
+                {isVerified && jarvisUiReady
+                  ? composeMode === 'keyboard'
+                    ? liveMicDockButton
+                    : keyboardButton
+                  : null}
               </div>
 
-              {isScanning && (
-                <div className="hud-scan-status absolute inset-0 z-30 flex items-center justify-center">
-                  <div className="hud-scan-status__card rounded-2xl px-5 py-3 text-sm font-medium backdrop-blur-md">
-                    Verifying…
-                  </div>
-                </div>
-              )}
 
-              {scanToast && (
-                <div className="absolute z-40 rounded-xl border border-red-400/30 bg-red-950/80 px-4 py-2 text-center text-sm text-red-100 backdrop-blur-md hud-inset-x hud-inset-top-below">
-                  {scanToast.message}
-                </div>
-              )}
-
-              {arError && isVerified && (
+              {arError && showMindAR && (
                 <div className="absolute z-40 rounded-xl border border-red-400/30 bg-red-950/85 px-4 py-2 text-center text-xs text-red-200 backdrop-blur-md hud-inset-x hud-inset-top-below">
                   {arError}
                 </div>
-              )}
-
-              {!isVerified && (
-                <button
-                  type="button"
-                  onClick={captureFrame}
-                  disabled={isScanning || !videoReady}
-                  className="hud-viewport-scan-fab group absolute left-1/2 z-50 -translate-x-1/2 hud-inset-bottom disabled:opacity-40"
-                >
-                  <span className="hud-scan-btn__bg" aria-hidden />
-                  <span className="hud-scan-btn__shine" aria-hidden />
-                  <span className="hud-scan-btn__label relative flex items-center justify-center gap-2 px-6 py-3 text-sm font-bold uppercase tracking-[0.14em]">
-                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                    Scan
-                  </span>
-                </button>
               )}
 
               {isVerified && jarvisUiReady && composeMode === 'keyboard' && (
@@ -2486,7 +3067,6 @@ function App() {
               )}
             </div>
             </div>
-          )}
         </div>
       </div>
     </>

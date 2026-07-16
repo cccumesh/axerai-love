@@ -8,6 +8,7 @@ const RECOMMENDED_ANY = [
 ]
 
 const OPTIONAL = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']
+const DASHBOARD_OPTIONAL = ['VITE_DASHBOARD_PASSWORD', 'VITE_DASHBOARD_PATH']
 
 function hasAny(keys) {
   return keys.some((key) => String(process.env[key] ?? '').trim())
@@ -47,6 +48,14 @@ const missingOptional = OPTIONAL.filter((key) => !String(process.env[key] ?? '')
 if (missingOptional.length) {
   console.warn('[verify-netlify-env] Optional — Supabase keys missing; ledger/dashboard off:')
   for (const key of missingOptional) {
+    console.warn(`  • ${key}`)
+  }
+}
+
+const missingDashboard = DASHBOARD_OPTIONAL.filter((key) => !String(process.env[key] ?? '').trim())
+if (missingDashboard.length) {
+  console.warn('[verify-netlify-env] Dashboard lock — set secret path + password on Netlify:')
+  for (const key of missingDashboard) {
     console.warn(`  • ${key}`)
   }
 }

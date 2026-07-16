@@ -1,3 +1,5 @@
+import { normalizeGeminiUsage } from './geminiUsage.js'
+
 const GEMINI_PROXY_PATH = '/.netlify/functions/gemini'
 const ELEVENLABS_PROXY_PATH = '/.netlify/functions/elevenlabs-tts'
 
@@ -8,7 +10,7 @@ export async function askGeminiViaProxy({
   systemInstruction,
   models,
   imagePart = null,
-  generationConfig = { temperature: 1.15, topP: 0.95 },
+  generationConfig = { temperature: 0.9, topP: 0.92 },
 }) {
   const response = await fetch(GEMINI_PROXY_PATH, {
     method: 'POST',
@@ -31,7 +33,11 @@ export async function askGeminiViaProxy({
     throw new Error('Gemini proxy returned empty text')
   }
 
-  return payload.text
+  return {
+    text: payload.text,
+    model: payload.model ?? models?.[0] ?? 'unknown',
+    usage: normalizeGeminiUsage(payload.usage ?? {}),
+  }
 }
 
 export async function requestElevenLabsViaProxy(text, signal) {

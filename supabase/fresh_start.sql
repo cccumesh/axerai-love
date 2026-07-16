@@ -13,6 +13,7 @@ create table ledger_threads (
   scan_count int not null default 0,
   conversation text not null default '',
   session_summaries text not null default '',
+  gemini_usage text not null default '',
   unique (verification_code, role)
 );
 
@@ -25,7 +26,7 @@ create policy "anon select ledger_threads" on ledger_threads for select to anon 
 create policy "anon update ledger_threads" on ledger_threads for update to anon using (true);
 
 -- 2 khali lines — scan ke baad bharengi
-insert into ledger_threads (verification_code, device_id, role, scan_count, conversation, session_summaries)
+insert into ledger_threads (verification_code, device_id, role, scan_count, conversation, session_summaries, gemini_usage)
 values
-  ('R', '', 'sender', 0, '', ''),
-  ('R', '', 'receiver', 0, '', '');
+  ('R', '', 'sender', 0, '', '', ''),
+  ('R', '', 'receiver', 0, '', '', '');

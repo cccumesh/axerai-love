@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js'
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import {
   Group,
   AnimationMixer,
@@ -15,6 +16,9 @@ export const MYRA_MODEL_PATH = '/models/sejal.fbx'
 const MODEL_PATH = MYRA_MODEL_PATH
 const IDLE_PATH = '/models/idle.fbx'
 const TALK_PATHS = ['/models/talking-4.fbx', '/models/talking-5.fbx', '/models/talking-6.fbx']
+
+let myraPreloadPromise = null
+let myraAssetCache = null
 
 const DEG = Math.PI / 180
 
@@ -110,8 +114,8 @@ export function clipForRig(clip, boneNames) {
   return new AnimationClip(clip.name, clip.duration, tracks)
 }
 
-function applyPlacement(wrapper, position = IDLE_PLACEMENT.position) {
-  const { rotation, scale } = IDLE_PLACEMENT
+function applyPlacement(wrapper, placement = IDLE_PLACEMENT) {
+  const { position, rotation, scale } = placement
   wrapper.position.set(position.x, position.y, position.z)
   wrapper.rotation.set(rotation.x * DEG, rotation.y * DEG, rotation.z * DEG)
   wrapper.scale.setScalar(scale)
@@ -241,20 +245,55 @@ function loadFbxFiles(loader, paths) {
   )
 }
 
-export function preloadMyraModels() {
-  const loader = new FBXLoader()
-  loader.load(MODEL_PATH, () => {})
-  loader.load(IDLE_PATH, () => {})
-  TALK_PATHS.forEach((path) => loader.load(path, () => {}))
+function loadMyraAssetBundle(loader = new FBXLoader()) {
+  return new Promise((resolve, reject) => {
+    loader.load(
+      MODEL_PATH,
+      (character) => {
+        character.animations = []
+        loader.load(
+          IDLE_PATH,
+          (idleFbx) => {
+            loadFbxFiles(loader, TALK_PATHS)
+              .then((talkFbxList) => resolve({ character, idleFbx, talkFbxList }))
+              .catch(reject)
+          },
+          undefined,
+          reject,
+        )
+      },
+      undefined,
+      reject,
+    )
+  })
 }
 
-export function MyraModel({ anchorGroup, isTalking }) {
+export function preloadMyraModels() {
+  if (myraPreloadPromise) return myraPreloadPromise
+  if (myraAssetCache) return Promise.resolve()
+
+  myraPreloadPromise = loadMyraAssetBundle()
+    .then((bundle) => {
+      myraAssetCache = bundle
+      console.info('[Myra] persona assets preloaded', 2 + TALK_PATHS.length)
+      return bundle
+    })
+    .catch((error) => {
+      myraPreloadPromise = null
+      throw error
+    })
+
+  return myraPreloadPromise
+}
+
+export function MyraModel({ anchorGroup, isTalking, placement = IDLE_PLACEMENT, revealed = true }) {
   const actionsRef = useRef({ idle: null, talks: [], activeTalk: null })
   const mixerRef = useRef(null)
   const characterRef = useRef(null)
   const skinnedMeshesRef = useRef([])
   const mountedRef = useRef(false)
   const talkingRef = useRef(isTalking)
+  const revealedRef = useRef(revealed)
   const lastTalkIndexRef = useRef(-1)
 
   useEffect(() => {
@@ -262,16 +301,15 @@ export function MyraModel({ anchorGroup, isTalking }) {
   }, [isTalking])
 
   useEffect(() => {
+    revealedRef.current = revealed
+    const wrapper = anchorGroup?.userData?.wrapper
+    if (wrapper) wrapper.visible = revealed
+  }, [revealed, anchorGroup])
+
+  useEffect(() => {
     if (!anchorGroup) return
 
     let disposed = false
-    const loader = new FBXLoader(
-      new LoadingManager(undefined, undefined, (url) => {
-        console.error('[Myra] load failed:', url)
-      }),
-    )
-
-    console.warn('[Myra] loading model:', MODEL_PATH)
 
     function mountCharacter(idleFbx, character, talkFbxList) {
       if (disposed) return
@@ -301,8 +339,10 @@ export function MyraModel({ anchorGroup, isTalking }) {
 
       const wrapper = new Group()
       wrapper.userData.isMyraWrapper = true
+      wrapper.visible = revealedRef.current
+      wrapper.renderOrder = 3
       wrapper.add(character)
-      applyPlacement(wrapper, IDLE_PLACEMENT.position)
+      applyPlacement(wrapper, placement)
       anchorGroup.add(wrapper)
 
       registerMorphTargets(anchorGroup, character)
@@ -328,30 +368,40 @@ export function MyraModel({ anchorGroup, isTalking }) {
       if (talkingRef.current) playRandomTalking(actions, lastTalkIndexRef)
       else playIdle(actions, mixer)
 
-      console.warn('[Myra] mounted with random talk pool', {
-        model: MODEL_PATH,
-        idle: IDLE_PATH,
-        talks: TALK_PATHS,
-        talkClips: talkClips.length,
-      })
+      console.info('[Myra] mounted on anchor', { revealed: revealedRef.current, cached: Boolean(myraAssetCache) })
     }
 
-    loader.load(MODEL_PATH, (character) => {
-      if (disposed) return
+    function mountFromBundle(bundle) {
+      const character = SkeletonUtils.clone(bundle.character)
+      mountCharacter(bundle.idleFbx, character, bundle.talkFbxList)
+    }
 
-      character.animations = []
-      loader.load(IDLE_PATH, (idleFbx) => {
+    if (myraAssetCache) {
+      mountFromBundle(myraAssetCache)
+    } else {
+      const loader = new FBXLoader(
+        new LoadingManager(undefined, undefined, (url) => {
+          console.error('[Myra] load failed:', url)
+        }),
+      )
+
+      console.warn('[Myra] loading model (no cache):', MODEL_PATH)
+      loader.load(MODEL_PATH, (character) => {
         if (disposed) return
-        loadFbxFiles(loader, TALK_PATHS)
-          .then((talkFbxList) => {
-            if (disposed) return
-            mountCharacter(idleFbx, character, talkFbxList)
-          })
-          .catch((error) => {
-            console.error('[Myra] talk clips failed to load', error)
-          })
+        character.animations = []
+        loader.load(IDLE_PATH, (idleFbx) => {
+          if (disposed) return
+          loadFbxFiles(loader, TALK_PATHS)
+            .then((talkFbxList) => {
+              if (disposed) return
+              mountCharacter(idleFbx, character, talkFbxList)
+            })
+            .catch((error) => {
+              console.error('[Myra] talk clips failed to load', error)
+            })
+        })
       })
-    })
+    }
 
     return () => {
       disposed = true
@@ -371,7 +421,7 @@ export function MyraModel({ anchorGroup, isTalking }) {
         .filter((c) => c.userData?.isMyraWrapper)
         .forEach((c) => anchorGroup.remove(c))
     }
-  }, [anchorGroup])
+  }, [anchorGroup, placement])
 
   useEffect(() => {
     const actions = actionsRef.current

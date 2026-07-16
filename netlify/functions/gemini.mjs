@@ -97,7 +97,9 @@ async function callGeminiModel({ apiKey, modelName, systemInstruction, userPromp
     throw new Error(`Gemini ${modelName} returned empty text`)
   }
 
-  return text
+  const usage = payload.usageMetadata ?? null
+
+  return { text, usage, model: modelName }
 }
 
 export default async (request) => {
@@ -136,7 +138,7 @@ export default async (request) => {
 
     for (let attempt = 1; attempt <= RETRIES_PER_MODEL; attempt += 1) {
       try {
-        const text = await callGeminiModel({
+        const result = await callGeminiModel({
           apiKey,
           modelName,
           systemInstruction,
@@ -144,7 +146,11 @@ export default async (request) => {
           imagePart,
           generationConfig,
         })
-        return jsonResponse({ text, model: modelName })
+        return jsonResponse({
+          text: result.text,
+          model: result.model,
+          usage: result.usage,
+        })
       } catch (error) {
         lastError = error
         const status = error.status ?? 500

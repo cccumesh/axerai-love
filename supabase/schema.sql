@@ -13,6 +13,7 @@ create table ledger_threads (
   scan_count int not null default 0,
   conversation text not null default '',
   session_summaries text not null default '',
+  gemini_usage text not null default '',
   unique (verification_code, role)
 );
 

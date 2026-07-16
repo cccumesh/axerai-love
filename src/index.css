@@ -9,8 +9,21 @@ body,
   margin: 0;
   overflow: hidden;
   -webkit-text-size-adjust: 100%;
-  touch-action: manipulation;
   overscroll-behavior: none;
+}
+
+/* AR app — no pinch zoom; scroll areas opt in with .axerai-scroll-touch */
+html:not(.admin-dash-page),
+html:not(.admin-dash-page) body,
+html:not(.admin-dash-page) #root {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+html.admin-dash-page,
+html.admin-dash-page body,
+html.admin-dash-page #root {
+  touch-action: manipulation;
 }
 
 /* Dashboard is a scrollable page — AR app keeps body locked */
@@ -33,6 +46,37 @@ body {
   width: 100%;
   height: 100dvh;
   height: 100svh;
+}
+
+/* Landscape block — AR/card scan portrait only */
+.axerai-orientation-lock {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  text-align: center;
+  background: #080f0a;
+  color: #f5c98a;
+  font-family: system-ui, sans-serif;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.axerai-orientation-lock__icon {
+  font-size: 2.5rem;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .axerai-orientation-lock {
+    display: flex;
+  }
 }
 
 /* Phone-first shell — full screen on every device */
@@ -1215,6 +1259,7 @@ body {
   max-height: 5.75rem;
   overflow-x: hidden;
   overflow-y: auto;
+  touch-action: pan-y;
   scrollbar-width: none;
 }
 

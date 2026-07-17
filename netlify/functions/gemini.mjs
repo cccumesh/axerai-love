@@ -1,3 +1,5 @@
+import { GoogleGenerativeAI } from '@google/generative-ai'
+
 const DEFAULT_MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-lite-latest']
 const RETRIES_PER_MODEL = 2
 
@@ -15,18 +17,31 @@ function sanitizeApiKey(raw) {
     .replace(/\s+/g, '')
 }
 
-function isInvalidApiKey(detail) {
-  return String(detail ?? '').toLowerCase().includes('api key')
+function keyFingerprint(key) {
+  if (!key) return 'missing'
+  if (key.startsWith('AQ.')) return `AQ… (${key.length} chars)`
+  if (key.startsWith('AIza')) return `AIza… (${key.length} chars)`
+  return `other (${key.length} chars)`
 }
 
-function isModelUnavailable(status, detail) {
-  const msg = `${status} ${detail}`.toLowerCase()
+function isInvalidApiKey(message) {
+  return String(message ?? '').toLowerCase().includes('api key')
+}
+
+function isModelUnavailable(message) {
+  const msg = String(message ?? '').toLowerCase()
   return msg.includes('404') || msg.includes('not found') || msg.includes('not supported')
 }
 
-function isRetryable(status, detail) {
-  const msg = `${status} ${detail}`.toLowerCase()
-  return status >= 500 || status === 429 || msg.includes('unavailable') || msg.includes('overloaded')
+function isRetryable(message) {
+  const msg = String(message ?? '').toLowerCase()
+  return (
+    msg.includes('429') ||
+    msg.includes('503') ||
+    msg.includes('unavailable') ||
+    msg.includes('overloaded') ||
+    msg.includes('high demand')
+  )
 }
 
 function buildParts(userPrompt, imagePart) {
@@ -38,41 +53,39 @@ function buildParts(userPrompt, imagePart) {
   return parts
 }
 
+/** Same SDK path as localhost — raw fetch + x-goog-api-key fails on some AQ keys. */
 async function callGeminiOnce({ apiKey, modelName, systemInstruction, userPrompt, imagePart, generationConfig }) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: String(systemInstruction ?? '') }] },
-      contents: [{ role: 'user', parts: buildParts(userPrompt, imagePart) }],
-      generationConfig: generationConfig ?? { temperature: 1.15, topP: 0.95 },
-    }),
+  const client = new GoogleGenerativeAI(apiKey)
+  const model = client.getGenerativeModel({
+    model: modelName,
+    systemInstruction: String(systemInstruction ?? '').trim() || undefined,
+    generationConfig: generationConfig ?? { temperature: 1.15, topP: 0.95 },
   })
 
-  const detail = await response.text()
-  if (!response.ok) {
-    const error = new Error(`Gemini ${modelName} HTTP ${response.status}: ${detail.slice(0, 240)}`)
-    error.status = response.status
-    error.detail = detail
-    throw error
-  }
+  const result = await model.generateContent({
+    contents: [{ role: 'user', parts: buildParts(userPrompt, imagePart) }],
+  })
 
-  const payload = JSON.parse(detail)
-  const text = (payload.candidates ?? [])
-    .flatMap((c) => c.content?.parts ?? [])
-    .map((p) => p.text ?? '')
-    .join('')
-    .trim()
-
+  const text = result.response.text()?.trim()
   if (!text) throw new Error(`Gemini ${modelName} returned empty text`)
-  return { text, usage: payload.usageMetadata ?? null, model: modelName }
+
+  return {
+    text,
+    usage: result.response.usageMetadata ?? null,
+    model: modelName,
+  }
 }
 
 export default async (request) => {
+  if (request.method === 'GET') {
+    const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY)
+    return jsonResponse({
+      ok: Boolean(apiKey),
+      fingerprint: keyFingerprint(apiKey),
+      hint: apiKey ? undefined : 'Set GEMINI_API_KEY (Functions + Runtime scope) and redeploy.',
+    })
+  }
+
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405)
   }
@@ -82,7 +95,7 @@ export default async (request) => {
     return jsonResponse(
       {
         error: 'GEMINI_API_KEY missing on server',
-        hint: 'Netlify → Environment variables → GEMINI_API_KEY (Functions scope). Remove VITE_GEMINI_API_KEY so the key stays off the public bundle. Then redeploy.',
+        hint: 'Netlify → GEMINI_API_KEY = same as local .env VITE_GEMINI_API_KEY. Scope: Functions + Runtime. Do NOT set VITE_GEMINI_API_KEY on Netlify.',
       },
       500,
     )
@@ -123,21 +136,20 @@ export default async (request) => {
         return jsonResponse({ text: result.text, model: result.model, usage: result.usage })
       } catch (error) {
         lastError = error
-        const status = error.status ?? 500
-        const detail = error.detail ?? error.message ?? ''
+        const message = error?.message ?? String(error)
 
-        if (isInvalidApiKey(detail)) {
+        if (isInvalidApiKey(message)) {
           return jsonResponse(
             {
-              error: error.message,
-              hint: 'Set GEMINI_API_KEY on Netlify (same key as local .env). Scope: Functions + Runtime. Redeploy after saving.',
+              error: message,
+              hint: `Server key ${keyFingerprint(apiKey)} rejected. Paste exact key from local .env into GEMINI_API_KEY (no VITE_ on Netlify). Redeploy.`,
             },
             400,
           )
         }
 
-        if (isModelUnavailable(status, detail)) break
-        if (isRetryable(status, detail) && attempt < RETRIES_PER_MODEL) continue
+        if (isModelUnavailable(message)) break
+        if (isRetryable(message) && attempt < RETRIES_PER_MODEL) continue
         break
       }
     }

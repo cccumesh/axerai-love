@@ -6,7 +6,8 @@ import {
   DoubleSide,
   LinearFilter,
 } from 'three'
-import { primeMobileAudio } from './elevenLabsTts.js'
+import { unlockMobileSpeechAudio } from './elevenLabsTts.js'
+import { isAppleMobileBrowser } from './mobileBrowser.js'
 
 export const TARGET_VIDEO_PATH = '/videos/target.mp4'
 const TARGET_PLANE_WIDTH = 1
@@ -14,14 +15,6 @@ const PLAY_RETRY_MS = 180
 const WATCHDOG_FALLBACK_MS = 16000
 
 let targetVideoPreloadPromise = null
-
-function isAppleMobileBrowser() {
-  const ua = navigator.userAgent
-  return (
-    /iPhone|iPad|iPod/i.test(ua) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  )
-}
 
 function configureInlineVideo(video) {
   video.muted = true
@@ -182,7 +175,7 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded, onCardTra
     pendingTargetFound = false
     clearRetryTimer()
 
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true })
     video.currentTime = 0
     video.muted = true
 

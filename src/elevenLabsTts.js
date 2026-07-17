@@ -1,5 +1,6 @@
 import { connectTtsAudio, disconnectTtsAudio } from './myraLipSync.js'
 import { USE_API_PROXY, requestElevenLabsViaProxy } from './apiProxy.js'
+import { isAppleMobileBrowser } from './mobileBrowser.js'
 
 const ELEVENLABS_API_KEY = String(import.meta.env.VITE_ELEVENLABS_API_KEY ?? '').trim()
 const ELEVENLABS_VOICE_ID = String(import.meta.env.VITE_ELEVENLABS_VOICE_ID ?? '').trim()
@@ -26,9 +27,19 @@ export function getElevenLabsConfigSummary() {
 
 let mobileAudioPrimed = false
 let primedAudioEl = null
+let sharedAudioCtx = null
 
 const SILENT_WAV =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+
+function getSharedAudioContext() {
+  const Ctx = window.AudioContext || window.webkitAudioContext
+  if (!Ctx) return null
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new Ctx()
+  }
+  return sharedAudioCtx
+}
 
 function getPrimedAudioElement() {
   if (!primedAudioEl) {
@@ -41,14 +52,12 @@ function getPrimedAudioElement() {
 }
 
 /** Call on user tap so iOS allows ElevenLabs playback after async Gemini. */
-export function primeMobileAudio() {
-  if (mobileAudioPrimed) return
+export function primeMobileAudio({ force = false } = {}) {
+  if (mobileAudioPrimed && !force) return
+
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext
-    if (Ctx) {
-      const ctx = new Ctx()
-      ctx.resume().catch(() => {})
-    }
+    getSharedAudioContext()?.resume().catch(() => {})
+
     const audio = getPrimedAudioElement()
     audio.muted = true
     audio.src = SILENT_WAV
@@ -64,9 +73,36 @@ export function primeMobileAudio() {
         .catch((error) => {
           console.warn('[ElevenLabs] Mobile audio prime failed:', error?.name || error)
         })
+    } else {
+      mobileAudioPrimed = true
     }
   } catch (error) {
     console.warn('[ElevenLabs] Mobile audio prime error:', error)
+  }
+}
+
+/** Refresh iOS/Safari audio + speechSynthesis unlock (restored after cleanup). */
+export function unlockMobileSpeechAudio({ force = false, speechPing = false } = {}) {
+  primeMobileAudio({ force })
+
+  const synth = window.speechSynthesis
+  if (!synth) return
+
+  try {
+    synth.resume?.()
+  } catch {
+    // ignore
+  }
+
+  if (!speechPing) return
+
+  try {
+    const ping = new SpeechSynthesisUtterance('')
+    ping.volume = 0.01
+    ping.rate = 1.15
+    synth.speak(ping)
+  } catch {
+    // ignore
   }
 }
 
@@ -249,6 +285,9 @@ async function playBlob(blob, { onStart, onEnd, onError }) {
   }
 
   try {
+    if (isAppleMobileBrowser()) {
+      primeMobileAudio({ force: true })
+    }
     connectTtsAudio(audio)
     onStart?.()
     await audio.play()

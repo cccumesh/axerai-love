@@ -35,7 +35,7 @@ import {
 import {
   isElevenLabsConfigured,
   speakWithElevenLabs,
-  primeMobileAudio,
+  unlockMobileSpeechAudio,
   stopElevenLabsSpeech,
 } from './elevenLabsTts.js'
 import { MyraModel, tickMyraMixer, MYRA_MODEL_PATH } from './myraModel.js'
@@ -356,6 +356,7 @@ function IntroLoadingScreen({
       role="status"
       aria-live="polite"
       aria-label="Loading Richera experience"
+      onTouchStart={() => unlockMobileSpeechAudio({ force: true })}
     >
       <div className="intro-loading__stage">
         <img src={INTRO_LOADING_BG} alt="" className="intro-loading__bg" aria-hidden />
@@ -383,6 +384,7 @@ function IntroLoadingScreen({
               className={`intro-access-tap${startupAccess === 'denied' || startupAccess === 'blocked' ? ' intro-access-tap--retry' : ''}`}
               aria-label="Allow camera, microphone, and location"
               disabled={startupAccess === 'granting'}
+              onTouchStart={() => unlockMobileSpeechAudio({ force: true, speechPing: true })}
               onClick={onGrantAccess}
             />
           </>
@@ -403,6 +405,16 @@ function IntroShell({
   onGrantAccess,
 }) {
   const [handoff, setHandoff] = useState(false)
+
+  useEffect(() => {
+    const prime = () => unlockMobileSpeechAudio({ force: true })
+    document.addEventListener('touchstart', prime, { passive: true })
+    document.addEventListener('click', prime, { passive: true })
+    return () => {
+      document.removeEventListener('touchstart', prime)
+      document.removeEventListener('click', prime)
+    }
+  }, [])
 
   useEffect(() => {
     if (!readyToEnter || handoff) return
@@ -968,7 +980,7 @@ function App() {
 
   const grantStartupAccess = useCallback(async () => {
     requestGeolocationInBackground()
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true, speechPing: true })
 
     const stream = await acquireStartupStream()
     stripAudioTracksFromStream(stream)
@@ -1209,7 +1221,23 @@ function App() {
       onDone?.()
     }
 
+    let spoke = false
     const speak = () => {
+      if (spoke) return
+      spoke = true
+
+      const synth = window.speechSynthesis
+      if (!synth) {
+        finish()
+        return
+      }
+
+      try {
+        synth.resume?.()
+      } catch {
+        // ignore
+      }
+
       const utterance = new SpeechSynthesisUtterance(fullResponse)
       applyMyraVoice(utterance, myraVoiceRef)
       utterance.rate = 1.06
@@ -1220,14 +1248,15 @@ function App() {
       }
       utterance.onend = finish
       utterance.onerror = finish
-      window.speechSynthesis.speak(utterance)
+      synth.speak(utterance)
     }
 
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true })
+
     const voices = window.speechSynthesis?.getVoices() ?? []
     if (voices.length === 0 && window.speechSynthesis) {
       window.speechSynthesis.addEventListener('voiceschanged', speak, { once: true })
-      window.setTimeout(speak, 120)
+      window.setTimeout(speak, 280)
       return
     }
     speak()
@@ -1243,7 +1272,7 @@ function App() {
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
     pauseLiveMicCapture()
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true })
     aiSpeakingRef.current = true
 
     let speechFinished = false
@@ -1474,7 +1503,7 @@ function mapGeminiCallType(reason) {
     if (aiSpeakingRef.current) return
 
     resumeLiveMicCapture()
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true })
     let ok = await startLiveMicModeRef.current({ softRestart: true })
     if (!ok) {
       await new Promise((resolve) => {
@@ -1586,7 +1615,7 @@ function mapGeminiCallType(reason) {
 
   const handleSendCompose = useCallback(() => {
     if (isAiThinking || isMyraTalking) return
-    primeMobileAudio()
+    unlockMobileSpeechAudio({ force: true })
     const text = composeText.trim()
     const image = userImageRef.current
     if (!text && !image) return
@@ -1942,7 +1971,7 @@ function mapGeminiCallType(reason) {
 
   const toggleComposeMode = useCallback(
     (mode) => {
-      primeMobileAudio()
+      unlockMobileSpeechAudio({ force: true })
       if (composeMode === mode) {
         if (mode === 'keyboard') {
           setComposeMode('liveMic')
@@ -2118,7 +2147,7 @@ function mapGeminiCallType(reason) {
       if (event?.button != null && event.button !== 0) return
       event?.preventDefault()
       if (isAiThinking || isMyraTalking || pttHoldingRef.current) return
-      primeMobileAudio()
+      unlockMobileSpeechAudio({ force: true })
 
       const button = event?.currentTarget
       if (button?.setPointerCapture && event.pointerId != null) {
@@ -2218,11 +2247,12 @@ function mapGeminiCallType(reason) {
   const speakMyraWelcome = useCallback(async () => {
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
+    unlockMobileSpeechAudio({ force: true })
     setIsAiThinking(true)
 
     const afterWelcomeSpeech = async () => {
       spokeForScanRef.current = true
-      primeMobileAudio()
+      unlockMobileSpeechAudio({ force: true })
       const ready = await prepareJarvisMode()
       if (!ready) {
         console.warn('[Jarvis] Live mic unavailable — keyboard mode enabled')
@@ -2454,7 +2484,7 @@ function mapGeminiCallType(reason) {
       const gen = ++verifyGenerationRef.current
       scanSnapInFlightRef.current = true
       setShowScanGuide(false)
-      primeMobileAudio()
+      unlockMobileSpeechAudio({ force: true, speechPing: true })
 
       const canvas = drawVideoFrameToCanvas(videoEl)
       scanSnapshotRef.current = null
@@ -2792,6 +2822,22 @@ function mapGeminiCallType(reason) {
     if (!mainRevealed) return
     attachCameraToVideo()
   }, [mainRevealed, attachCameraToVideo])
+
+  useEffect(() => {
+    if (!mainRevealed) return undefined
+
+    const primeOnGesture = () => {
+      unlockMobileSpeechAudio({ force: true })
+    }
+
+    document.addEventListener('touchstart', primeOnGesture, { passive: true })
+    document.addEventListener('click', primeOnGesture, { passive: true })
+
+    return () => {
+      document.removeEventListener('touchstart', primeOnGesture)
+      document.removeEventListener('click', primeOnGesture)
+    }
+  }, [mainRevealed])
 
   useEffect(() => {
     logAxeraiBuildConfig()

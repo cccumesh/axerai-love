@@ -1,3 +1,5 @@
+import { isAppleMobileBrowser } from './mobileBrowser.js'
+
 let audioCtx = null
 let analyser = null
 let sourceNode = null
@@ -70,8 +72,11 @@ export function getMyraMouthLevel() {
 export function startSpeechLipSync() {
   speechActive = true
   syntheticPhase = 0
-  ensureAudioGraph()
-  audioCtx?.resume().catch(() => {})
+  // iOS: skip Web Audio graph — it can steal the audio session from TTS playback.
+  if (!isAppleMobileBrowser()) {
+    ensureAudioGraph()
+    audioCtx?.resume().catch(() => {})
+  }
   startTicker()
 }
 
@@ -86,11 +91,7 @@ export function connectTtsAudio(audioEl) {
   if (!audioEl) return
 
   // Safari/iOS: play through <audio> only — Web Audio routing can cause echo on some devices.
-  const ua = navigator.userAgent
-  const isAppleMobile =
-    /iPhone|iPad|iPod/i.test(ua) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  if (isAppleMobile) {
+  if (isAppleMobileBrowser()) {
     startSpeechLipSync()
     return
   }

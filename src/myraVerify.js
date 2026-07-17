@@ -1,3 +1,4 @@
+import { askGeminiViaProxy, USE_API_PROXY } from './apiProxy.js'
 import { usageFromResponse } from './geminiUsage.js'
 import { VERIFY_MODEL_CHAIN } from './geminiModels.js'
 
@@ -50,7 +51,7 @@ const VERIFY_USER_PROMPT =
 let geminiClient = null
 
 async function getGeminiClient() {
-  if (!GEMINI_API_KEY) return null
+  if (USE_API_PROXY || !GEMINI_API_KEY) return null
   if (!geminiClient) {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     geminiClient = new GoogleGenerativeAI(GEMINI_API_KEY)
@@ -59,7 +60,7 @@ async function getGeminiClient() {
 }
 
 export function isGeminiVerifyConfigured() {
-  return Boolean(GEMINI_API_KEY)
+  return USE_API_PROXY || Boolean(GEMINI_API_KEY)
 }
 
 function parseDataUrl(dataUrl) {
@@ -125,6 +126,21 @@ export function parseVerifyResponse(text) {
 
 async function askGeminiVerify(imagePart) {
   const generationConfig = { temperature: 0, topP: 0.8 }
+
+  if (USE_API_PROXY) {
+    const payload = await askGeminiViaProxy({
+      userPrompt: VERIFY_USER_PROMPT,
+      systemInstruction: VERIFY_SYSTEM,
+      models: VERIFY_MODEL_CHAIN,
+      imagePart,
+      generationConfig,
+    })
+    return {
+      parsed: parseVerifyResponse(payload.text),
+      model: payload.model,
+      usage: payload.usage,
+    }
+  }
 
   const client = await getGeminiClient()
   if (!client) {

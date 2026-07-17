@@ -1,4 +1,5 @@
 import { connectTtsAudio, disconnectTtsAudio } from './myraLipSync.js'
+import { USE_API_PROXY, requestElevenLabsViaProxy } from './apiProxy.js'
 
 const ELEVENLABS_API_KEY = String(import.meta.env.VITE_ELEVENLABS_API_KEY ?? '').trim()
 const ELEVENLABS_VOICE_ID = String(import.meta.env.VITE_ELEVENLABS_VOICE_ID ?? '').trim()
@@ -12,7 +13,7 @@ let connectionProbeDone = false
 const cachedVoiceNames = new Map()
 
 export function isElevenLabsConfigured() {
-  return Boolean(ELEVENLABS_API_KEY)
+  return USE_API_PROXY || Boolean(ELEVENLABS_API_KEY)
 }
 
 export function getElevenLabsConfigSummary() {
@@ -139,6 +140,7 @@ function parseTtsError(status, detail) {
 }
 
 async function fetchAccountCredits() {
+  if (USE_API_PROXY) return { label: 'server proxy', error: 'Credits hidden in proxy mode' }
   try {
     const [subRes, userRes] = await Promise.all([
       fetch('https://api.elevenlabs.io/v1/user/subscription', {
@@ -177,6 +179,7 @@ async function fetchAccountCredits() {
 }
 
 async function loadVoiceNames() {
+  if (USE_API_PROXY) return
   try {
     const response = await fetch('https://api.elevenlabs.io/v1/voices', {
       headers: { 'xi-api-key': ELEVENLABS_API_KEY },
@@ -196,6 +199,8 @@ async function loadVoiceNames() {
 }
 
 async function fetchVoiceCandidates() {
+  if (USE_API_PROXY) return [ELEVENLABS_VOICE_ID].filter(Boolean)
+
   if (cachedVoiceCandidates) return cachedVoiceCandidates
 
   await loadVoiceNames()
@@ -271,6 +276,10 @@ function buildTtsBody(text) {
 }
 
 async function requestTtsResponse(text, voiceId, signal) {
+  if (USE_API_PROXY) {
+    return requestElevenLabsViaProxy(text, signal)
+  }
+
   return fetch(buildTtsUrl(voiceId), {
     method: 'POST',
     headers: {
@@ -292,6 +301,9 @@ async function playTtsResponse(response, callbacks, signal) {
 export async function probeElevenLabsConnection() {
   if (!isElevenLabsConfigured()) {
     return { ok: false, error: 'ElevenLabs not configured' }
+  }
+  if (USE_API_PROXY) {
+    return { ok: true, voiceId: 'server-proxy', model: ELEVENLABS_MODEL }
   }
   if (!ELEVENLABS_VOICE_ID) {
     return { ok: false, error: 'VITE_ELEVENLABS_VOICE_ID missing in .env' }
@@ -327,7 +339,16 @@ export async function logElevenLabsConnectionOnce() {
 
   const config = getElevenLabsConfigSummary()
   if (!config.configured) {
-    console.warn('[ElevenLabs] Not configured — using browser TTS. Add VITE_ELEVENLABS_API_KEY to .env / Netlify env.')
+    console.warn(
+      import.meta.env.PROD
+        ? '[ElevenLabs] Not configured — set ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID on Netlify (server env).'
+        : '[ElevenLabs] Not configured — using browser TTS. Add VITE_ELEVENLABS_API_KEY to .env',
+    )
+    return
+  }
+
+  if (USE_API_PROXY) {
+    console.log('[ElevenLabs] Using Netlify proxy — API key stays server-side')
     return
   }
 

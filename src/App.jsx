@@ -3101,15 +3101,6 @@ function mapGeminiCallType(reason) {
                 </div>
               ) : null}
 
-              <div className={`hud-viewport__frame pointer-events-none absolute inset-0 z-[6]${experienceViewMode === 'ar' && showMindAR ? ' hud-viewport__frame--ar' : ''}`} aria-hidden>
-                <span className="hud-corner hud-corner--tl" />
-                <span className="hud-corner hud-corner--tr" />
-                <span className="hud-corner hud-corner--bl" />
-                <span className="hud-corner hud-corner--br" />
-                <span className="hud-crosshair" />
-                <span className="hud-viewport-scan" />
-              </div>
-
               <div className="hud-side-dock absolute z-50 hud-inset-top hud-inset-right">
                 {isVerified ? (
                   <button

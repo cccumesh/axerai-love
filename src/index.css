@@ -322,6 +322,10 @@ body {
   box-shadow: none;
 }
 
+.hud-viewport--stage::before {
+  display: none;
+}
+
 /* MindAR camera feed — fill frame (fix black / tiny canvas) */
 .hud-viewport--stage .mindar-host,
 .hud-viewport--stage .mindar-host canvas,

@@ -538,11 +538,14 @@ function MindARSession({
   const containerRef = useRef(null)
   const [anchorGroup, setAnchorGroup] = useState(null)
   const [targetVideoPlaying, setTargetVideoPlaying] = useState(false)
+  const [myraSlotActive, setMyraSlotActive] = useState(false)
   const showMyraRef = useRef(showMyra)
+  const playTargetVideoRef = useRef(playTargetVideo)
   const mindarVideoRef = useRef(null)
 
   useEffect(() => {
     showMyraRef.current = showMyra
+    if (showMyra) setMyraSlotActive(true)
   }, [showMyra])
   const videoPhaseActiveRef = useRef(true)
   const cardTrackHandlerRef = useRef(onCardTracked)
@@ -574,7 +577,7 @@ function MindARSession({
     let keepCameraAlive = Boolean(previewStream?.active)
     const sessionGen = { id: 0 }
     sessionGen.id = Math.random()
-    const enableTargetVideo = playTargetVideo
+    const enableTargetVideo = playTargetVideoRef.current
 
     async function startMindAR() {
       const mySession = sessionGen.id
@@ -614,15 +617,16 @@ function MindARSession({
             anchorGroup: anchor.group,
             onCardTracked: () => {
               if (!active || sessionGen.id !== mySession) return
+              setMyraSlotActive(true)
               setTargetVideoPlaying(true)
               notifyCardTracked('video')
             },
             onEnded: () => {
               if (!active || sessionGen.id !== mySession) return
               videoPhaseActiveRef.current = false
+              setTargetVideoPlaying(false)
               const wrapper = anchor.group?.userData?.wrapper
               if (wrapper && showMyraRef.current) wrapper.visible = true
-              setTargetVideoPlaying(false)
               disposeTargetVideo?.()
               disposeTargetVideo = null
               attachCardTrackHandler()
@@ -708,6 +712,7 @@ function MindARSession({
       sessionGen.id = 0
       active = false
       setTargetVideoPlaying(false)
+      setMyraSlotActive(false)
       disposeTargetVideo?.()
       disposeTargetVideo = null
       setAnchorGroup(null)
@@ -715,7 +720,7 @@ function MindARSession({
       softTeardownMindAR(mindarThree, keepCameraAlive)
       if (container) container.replaceChildren()
     }
-  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked, playTargetVideo])
+  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked])
 
   return (
     <div
@@ -727,7 +732,7 @@ function MindARSession({
         className="mindar-host absolute inset-0 h-full w-full overflow-hidden"
       />
 
-      {anchorGroup && (showMyra || targetVideoPlaying) ? (
+      {anchorGroup && (myraSlotActive || showMyra || targetVideoPlaying) ? (
         <MyraModel
           key={MYRA_MODEL_PATH}
           anchorGroup={anchorGroup}
@@ -947,6 +952,7 @@ function App() {
   const [arPreviewStream, setArPreviewStream] = useState(null)
   const [arCameraProfile, setArCameraProfile] = useState(null)
   const [jarvisUiReady, setJarvisUiReady] = useState(false)
+  const [myraReplyLine, setMyraReplyLine] = useState('')
   const [composeText, setComposeText] = useState('')
   const [userImagePreview, setUserImagePreview] = useState(null)
   const [composeMode, setComposeMode] = useState(null)
@@ -1330,6 +1336,8 @@ function App() {
       }
       const line = pickMyraErrorLine(situation)
       console.info('[Myra] offline:', situation, '—', getMyraErrorTriggerNote(situation))
+      setMyraReplyLine(prepareMyraSpeechText(line))
+      setJarvisUiReady(true)
       setIsAiThinking(true)
       speakMyraReply(line, onDone)
     },
@@ -1519,6 +1527,10 @@ function mapGeminiCallType(reason) {
 
   const deliverMyraGeminiResponse = useCallback(
     (fullResponse, afterSpeech) => {
+      const caption = prepareMyraSpeechText(fullResponse)
+      if (caption) setMyraReplyLine(caption)
+      setJarvisUiReady(true)
+
       const onSpeechDone = async () => {
         setJarvisUiReady(true)
         await afterSpeech?.()
@@ -1564,6 +1576,7 @@ function mapGeminiCallType(reason) {
       }
 
       pauseMicForGemini()
+      setMyraReplyLine('')
 
       try {
         await persistHistoryEntry('user', trimmed || '[image shared]')
@@ -2462,6 +2475,10 @@ function mapGeminiCallType(reason) {
       isVerifiedRef.current = true
       setShowScanGuide(false)
       setArError(null)
+      setJarvisUiReady(true)
+      jarvisActiveRef.current = true
+      setComposeMode('keyboard')
+      composeModeRef.current = 'keyboard'
 
       ensureMyraWelcome({
         delayMs: targetVideoDoneRef.current ? 0 : WELCOME_AFTER_VERIFY_FALLBACK_MS,
@@ -2554,6 +2571,7 @@ function mapGeminiCallType(reason) {
     userImageRef.current = null
     setUserImagePreview(null)
     setJarvisUiReady(false)
+    setMyraReplyLine('')
     setExperienceViewMode('ar')
     stopJarvisMode()
     stopAllCameraStreams()
@@ -3085,7 +3103,7 @@ function mapGeminiCallType(reason) {
                     onSessionReady={handleMindARReady}
                     onTargetVideoEnded={handleTargetVideoEnded}
                     onCardTracked={handleCardTracked}
-                    playTargetVideo={!targetVideoDone}
+                    playTargetVideo
                     showMyra={isVerified && mindarReady}
                     isTalking={isMyraTalking}
                   />
@@ -3130,6 +3148,18 @@ function mapGeminiCallType(reason) {
                   {arError}
                 </div>
               )}
+
+              {isVerified && (myraReplyLine || isAiThinking) ? (
+                <div
+                  className="myra-reply-bubble myra-compose-wrap--dock-clear absolute z-[49] hud-inset-bottom"
+                  aria-live="polite"
+                >
+                  {isAiThinking && !myraReplyLine ? (
+                    <p className="myra-reply-bubble__thinking">Myra soch rahi hai…</p>
+                  ) : null}
+                  {myraReplyLine ? <p className="myra-reply-bubble__text">{myraReplyLine}</p> : null}
+                </div>
+              ) : null}
 
               {isVerified && jarvisUiReady && composeMode === 'keyboard' && (
                 <div className="myra-compose-wrap myra-compose-wrap--dock-clear absolute z-50 hud-inset-bottom">

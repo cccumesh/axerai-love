@@ -114,10 +114,22 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded, onCardTra
     clearRetryTimer()
     clearWatchdog()
     if (playAttempted || pendingTargetFound) onEnded?.()
-    cleanupMesh()
-    video.pause()
-    video.removeAttribute('src')
-    video.load()
+
+    const fadeMs = 320
+    const start = performance.now()
+    const fadeStep = (now) => {
+      const t = Math.min(1, (now - start) / fadeMs)
+      material.opacity = 1 - t
+      if (t < 1) {
+        requestAnimationFrame(fadeStep)
+        return
+      }
+      cleanupMesh()
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+    requestAnimationFrame(fadeStep)
   }
 
   const startWatchdog = () => {

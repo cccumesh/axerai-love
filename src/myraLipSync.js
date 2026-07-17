@@ -84,6 +84,17 @@ export function stopSpeechLipSync() {
 
 export function connectTtsAudio(audioEl) {
   if (!audioEl) return
+
+  // Safari/iOS: play through <audio> only — Web Audio routing can cause echo on some devices.
+  const ua = navigator.userAgent
+  const isAppleMobile =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  if (isAppleMobile) {
+    startSpeechLipSync()
+    return
+  }
+
   if (!ensureAudioGraph()) return
 
   audioCtx.resume().catch(() => {})

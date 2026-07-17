@@ -107,6 +107,10 @@ const LIVE_MIC_SILENCE_MS = 2800
 /** Mic energy must stay low this long after last heard voice */
 const LIVE_MIC_VOICE_TAIL_MS = 650
 const LIVE_MIC_VOICE_ENERGY = 20
+/** If target video is stuck on Safari, still start Myra welcome after verify */
+const WELCOME_AFTER_VERIFY_FALLBACK_MS = 4500
+/** Never block mic/keyboard UI if TTS never fires ended on mobile Safari */
+const MYRA_TTS_SAFETY_MS = 35000
 
 function pickBackCameraId(devices) {
   const back = devices.find((device) => /back|rear|environment|wide/i.test(device.label))
@@ -141,6 +145,13 @@ const STARTUP_AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
+}
+
+/** Camera preview must never carry mic audio — Safari can sidetone/echo if audio tracks stay live. */
+function stripAudioTracksFromStream(stream) {
+  if (!(stream instanceof MediaStream)) return stream
+  stream.getAudioTracks().forEach((track) => track.stop())
+  return stream
 }
 
 /** Camera + mic in one browser prompt — stream kept alive for instant preview. */
@@ -692,7 +703,7 @@ function MindARSession({
       softTeardownMindAR(mindarThree, keepCameraAlive)
       if (container) container.replaceChildren()
     }
-  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked])
+  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked, playTargetVideo])
 
   return (
     <div
@@ -859,6 +870,8 @@ function App() {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const spokeForScanRef = useRef(false)
+  const welcomeInFlightRef = useRef(false)
+  const welcomeDelayTimerRef = useRef(null)
   const mindarDelayRef = useRef(null)
   const arStreamRef = useRef(null)
   const mindarReadyRef = useRef(false)
@@ -958,6 +971,7 @@ function App() {
     primeMobileAudio()
 
     const stream = await acquireStartupStream()
+    stripAudioTracksFromStream(stream)
     streamRef.current = stream
 
     const videoInputs = await loadDevices()
@@ -1076,6 +1090,18 @@ function App() {
     micStreamRef.current = null
   }, [])
 
+  const pauseLiveMicCapture = useCallback(() => {
+    liveMicStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = false
+    })
+  }, [])
+
+  const resumeLiveMicCapture = useCallback(() => {
+    liveMicStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = true
+    })
+  }, [])
+
   const ensureMicPermission = useCallback(async () => {
     if (startupPermissionsDoneRef.current) return true
     try {
@@ -1172,12 +1198,10 @@ function App() {
   }, [clearJarvisSpeechTimer, stopLiveMicMode, stopMicStream])
 
   const speakWithBrowserTts = useCallback((fullResponse, onDone, onAudioStart) => {
-    const utterance = new SpeechSynthesisUtterance(fullResponse)
-    applyMyraVoice(utterance, myraVoiceRef)
-    utterance.rate = 1.06
-    utterance.pitch = 1
-
+    let finished = false
     const finish = () => {
+      if (finished) return
+      finished = true
       stopSpeechLipSync()
       aiSpeakingRef.current = false
       setisMyraTalking(false)
@@ -1185,13 +1209,28 @@ function App() {
       onDone?.()
     }
 
-    utterance.onstart = () => {
-      startSpeechLipSync()
-      onAudioStart?.()
+    const speak = () => {
+      const utterance = new SpeechSynthesisUtterance(fullResponse)
+      applyMyraVoice(utterance, myraVoiceRef)
+      utterance.rate = 1.06
+      utterance.pitch = 1
+      utterance.onstart = () => {
+        startSpeechLipSync()
+        onAudioStart?.()
+      }
+      utterance.onend = finish
+      utterance.onerror = finish
+      window.speechSynthesis.speak(utterance)
     }
-    utterance.onend = finish
-    utterance.onerror = finish
-    window.speechSynthesis.speak(utterance)
+
+    primeMobileAudio()
+    const voices = window.speechSynthesis?.getVoices() ?? []
+    if (voices.length === 0 && window.speechSynthesis) {
+      window.speechSynthesis.addEventListener('voiceschanged', speak, { once: true })
+      window.setTimeout(speak, 120)
+      return
+    }
+    speak()
   }, [])
 
   const speakMyraReply = useCallback(async (fullResponse, onDone) => {
@@ -1203,15 +1242,31 @@ function App() {
 
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
+    pauseLiveMicCapture()
+    primeMobileAudio()
     aiSpeakingRef.current = true
 
+    let speechFinished = false
+    let safetyTimer = null
+
     const finish = () => {
+      if (speechFinished) return
+      speechFinished = true
+      if (safetyTimer) {
+        clearTimeout(safetyTimer)
+        safetyTimer = null
+      }
       stopSpeechLipSync()
       aiSpeakingRef.current = false
       setisMyraTalking(false)
       setIsAiThinking(false)
       onDone?.()
     }
+
+    safetyTimer = window.setTimeout(() => {
+      console.warn('[Myra] TTS safety timeout — continuing flow')
+      finish()
+    }, MYRA_TTS_SAFETY_MS)
 
     const startTalkingAnimation = () => {
       startSpeechLipSync()
@@ -1232,8 +1287,8 @@ function App() {
       }
     }
 
-    speakWithBrowserTts(speechText, onDone, startTalkingAnimation)
-  }, [speakWithBrowserTts])
+    speakWithBrowserTts(speechText, finish, startTalkingAnimation)
+  }, [pauseLiveMicCapture, speakWithBrowserTts])
 
   /** Scripted error lines — Myra speaks unless situation is in MYRA_ERROR_SILENT. */
   const speakMyraErrorLine = useCallback(
@@ -1388,6 +1443,7 @@ function mapGeminiCallType(reason) {
     pttCommittedRef.current = false
     setIsListening(false)
     setIsAiThinking(true)
+    pauseLiveMicCapture()
     if (liveMicSilenceTimerRef.current) {
       clearTimeout(liveMicSilenceTimerRef.current)
       liveMicSilenceTimerRef.current = null
@@ -1404,7 +1460,7 @@ function mapGeminiCallType(reason) {
       // ignore
     }
     liveMicRecognitionRef.current = null
-  }, [])
+  }, [pauseLiveMicCapture])
 
   const resumeMicAfterGemini = useCallback(async () => {
     if (!jarvisActiveRef.current) return
@@ -1415,6 +1471,9 @@ function mapGeminiCallType(reason) {
       return
     }
 
+    if (aiSpeakingRef.current) return
+
+    resumeLiveMicCapture()
     primeMobileAudio()
     let ok = await startLiveMicModeRef.current({ softRestart: true })
     if (!ok) {
@@ -1427,7 +1486,7 @@ function mapGeminiCallType(reason) {
       console.warn('[Jarvis] Live mic could not resume after Myra reply')
       setIsListening(false)
     }
-  }, [])
+  }, [resumeLiveMicCapture])
 
   const deliverMyraGeminiResponse = useCallback(
     (fullResponse, afterSpeech) => {
@@ -1628,7 +1687,12 @@ function mapGeminiCallType(reason) {
 
   const flushLiveMicUtterance = useCallback(() => {
     const text = liveMicDisplayRef.current.trim()
-    if (!text || composeModeRef.current !== 'liveMic' || jarvisBusyRef.current) {
+    if (
+      !text ||
+      composeModeRef.current !== 'liveMic' ||
+      jarvisBusyRef.current ||
+      aiSpeakingRef.current
+    ) {
       clearLiveMicSilenceTimer()
       return
     }
@@ -1706,6 +1770,7 @@ function mapGeminiCallType(reason) {
           liveMicDisplayRef.current.trim() &&
           composeModeRef.current === 'liveMic' &&
           !jarvisBusyRef.current &&
+          !aiSpeakingRef.current &&
           !liveMicSilenceTimerRef.current
         ) {
           const quietFor = Date.now() - liveMicLastVoiceAtRef.current
@@ -1816,22 +1881,37 @@ function mapGeminiCallType(reason) {
       if (
         composeModeRef.current === 'liveMic' &&
         !jarvisBusyRef.current &&
+        !aiSpeakingRef.current &&
         errorEvent.error !== 'not-allowed'
       ) {
         window.setTimeout(() => {
-          if (composeModeRef.current !== 'liveMic' || jarvisBusyRef.current) return
+          if (composeModeRef.current !== 'liveMic' || jarvisBusyRef.current || aiSpeakingRef.current) {
+            return
+          }
           startLiveMicModeRef.current({ softRestart: true })
         }, 220)
       }
     }
 
     recognition.onend = () => {
-      if (composeModeRef.current !== 'liveMic' || jarvisBusyRef.current) return
+      if (
+        composeModeRef.current !== 'liveMic' ||
+        jarvisBusyRef.current ||
+        aiSpeakingRef.current
+      ) {
+        return
+      }
       if (liveMicDisplayRef.current.trim()) {
         scheduleLiveMicSend()
       }
       window.setTimeout(() => {
-        if (composeModeRef.current !== 'liveMic' || jarvisBusyRef.current) return
+        if (
+          composeModeRef.current !== 'liveMic' ||
+          jarvisBusyRef.current ||
+          aiSpeakingRef.current
+        ) {
+          return
+        }
         try {
           liveMicRecognitionRef.current?.start()
         } catch {
@@ -2128,14 +2208,28 @@ function mapGeminiCallType(reason) {
     endPushToTalkRef.current = endPushToTalk
   }, [endPushToTalk])
 
+  const clearWelcomeDelayTimer = useCallback(() => {
+    if (welcomeDelayTimerRef.current) {
+      clearTimeout(welcomeDelayTimerRef.current)
+      welcomeDelayTimerRef.current = null
+    }
+  }, [])
+
   const speakMyraWelcome = useCallback(async () => {
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
     setIsAiThinking(true)
 
     const afterWelcomeSpeech = async () => {
+      spokeForScanRef.current = true
+      primeMobileAudio()
       const ready = await prepareJarvisMode()
-      if (!ready) return
+      if (!ready) {
+        console.warn('[Jarvis] Live mic unavailable — keyboard mode enabled')
+        setComposeMode('keyboard')
+        composeModeRef.current = 'keyboard'
+        return
+      }
       setComposeMode('liveMic')
       composeModeRef.current = 'liveMic'
       await startLiveMicMode()
@@ -2194,6 +2288,30 @@ function mapGeminiCallType(reason) {
     }
   }, [askGemini, deliverMyraGeminiResponse, prepareJarvisMode, startLiveMicMode])
 
+  const ensureMyraWelcome = useCallback(
+    ({ delayMs = 0, reason = '' } = {}) => {
+      if (spokeForScanRef.current || welcomeInFlightRef.current) return
+
+      const run = () => {
+        welcomeDelayTimerRef.current = null
+        if (spokeForScanRef.current || welcomeInFlightRef.current) return
+        welcomeInFlightRef.current = true
+        console.info('[Jarvis] Myra welcome start:', reason || 'scan')
+        void speakMyraWelcome().finally(() => {
+          welcomeInFlightRef.current = false
+        })
+      }
+
+      clearWelcomeDelayTimer()
+      if (delayMs > 0) {
+        welcomeDelayTimerRef.current = window.setTimeout(run, delayMs)
+        return
+      }
+      run()
+    },
+    [clearWelcomeDelayTimer, speakMyraWelcome],
+  )
+
   // --- END GEMINI LOGIC ---
 
   function releasePreviewCamera() {
@@ -2242,6 +2360,8 @@ function mapGeminiCallType(reason) {
     const stream = streamRef.current
     if (!stream?.active) return
 
+    stripAudioTracksFromStream(stream)
+
     mindarReadyRef.current = false
     setMindarReady(false)
     arStreamRef.current = stream
@@ -2287,10 +2407,8 @@ function mapGeminiCallType(reason) {
     setTargetVideoDone(true)
     targetVideoDoneRef.current = true
     if (!isVerifiedRef.current) return
-    if (spokeForScanRef.current) return
-    spokeForScanRef.current = true
-    speakMyraWelcome()
-  }, [speakMyraWelcome])
+    ensureMyraWelcome({ reason: 'target-video-ended' })
+  }, [ensureMyraWelcome])
 
   const completeVerification = useCallback(
     async (verificationCode) => {
@@ -2315,12 +2433,12 @@ function mapGeminiCallType(reason) {
       setShowScanGuide(false)
       setArError(null)
 
-      if (targetVideoDoneRef.current && !spokeForScanRef.current) {
-        spokeForScanRef.current = true
-        speakMyraWelcome()
-      }
+      ensureMyraWelcome({
+        delayMs: targetVideoDoneRef.current ? 0 : WELCOME_AFTER_VERIFY_FALLBACK_MS,
+        reason: targetVideoDoneRef.current ? 'verify-video-done' : 'verify-fallback',
+      })
     },
-    [speakMyraErrorLine, speakMyraWelcome],
+    [ensureMyraWelcome, speakMyraErrorLine],
   )
 
   const runAnchorVerify = useCallback(
@@ -2386,6 +2504,8 @@ function mapGeminiCallType(reason) {
     verifyGenerationRef.current += 1
     verifyFailCountRef.current = 0
     spokeForScanRef.current = false
+    welcomeInFlightRef.current = false
+    clearWelcomeDelayTimer()
     setTargetVideoDone(false)
     targetVideoDoneRef.current = false
     setMindarReady(false)
@@ -2421,7 +2541,7 @@ function mapGeminiCallType(reason) {
     } finally {
       restartingScanRef.current = false
     }
-  }, [grantStartupAccess, stopJarvisMode])
+  }, [clearWelcomeDelayTimer, grantStartupAccess, stopJarvisMode])
 
   useEffect(() => {
     endExperienceRef.current = endExperience
@@ -2883,6 +3003,7 @@ function mapGeminiCallType(reason) {
                   className="hud-viewport-tap absolute inset-0 z-[3] cursor-default border-0 bg-transparent p-0"
                   aria-label="Double-tap to flip camera"
                   onClick={handleViewportDoubleTap}
+                  onContextMenu={(event) => event.preventDefault()}
                 />
               ) : null}
               {experienceViewMode === 'ar' && showMindAR && !mindarReady && (

@@ -2,10 +2,6 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { AmbientLight, DirectionalLight, Clock } from 'three'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
 import {
-  askGeminiViaProxy,
-  USE_API_PROXY,
-} from './apiProxy.js'
-import {
   classifyGeminiError,
   getMyraErrorTriggerNote,
   isOfflineMyraFallback,
@@ -66,7 +62,7 @@ const GEMINI_API_KEY = String(import.meta.env.VITE_GEMINI_API_KEY ?? '').trim()
 let geminiClient = null
 
 async function getGeminiClient() {
-  if (USE_API_PROXY || !GEMINI_API_KEY) return null
+  if (!GEMINI_API_KEY) return null
   if (!geminiClient) {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     geminiClient = new GoogleGenerativeAI(GEMINI_API_KEY)
@@ -75,7 +71,7 @@ async function getGeminiClient() {
 }
 
 function isGeminiConfigured() {
-  return USE_API_PROXY || Boolean(GEMINI_API_KEY)
+  return Boolean(GEMINI_API_KEY)
 }
 
 function logAxeraiBuildConfig() {
@@ -83,18 +79,15 @@ function logAxeraiBuildConfig() {
   const elevenOk = isElevenLabsConfigured()
   const ledgerOk = isLedgerConfigured()
   console.info(
-    `[Axerai] Runtime — Gemini: ${geminiOk ? (USE_API_PROXY ? 'proxy' : 'local key') : 'MISSING'}, ElevenLabs: ${elevenOk ? (USE_API_PROXY ? 'proxy' : 'local key') : 'browser TTS'}, Supabase: ${ledgerOk ? 'yes' : 'MISSING'}, host: ${window.location.hostname}`,
+    `[Axerai] Runtime — Gemini: ${geminiOk ? 'client key' : 'MISSING'}, ElevenLabs: ${elevenOk ? 'client key' : 'browser TTS'}, Supabase: ${ledgerOk ? 'yes' : 'MISSING'}, host: ${window.location.hostname}`,
   )
   if (ledgerOk) {
     void probeLedgerHealth()
   } else {
     console.warn('[Axerai] Ledger OFF — add VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY to .env and restart npm run dev.')
   }
-  if (import.meta.env.PROD && USE_API_PROXY) {
-    console.info('[Axerai] API keys are server-side via Netlify Functions — not exposed in browser bundle.')
-  }
-  if (!USE_API_PROXY && !geminiOk) {
-    console.warn('[Axerai] Local dev — add VITE_GEMINI_API_KEY to .env or run netlify dev with GEMINI_API_KEY.')
+  if (!geminiOk) {
+    console.warn('[Axerai] Gemini missing — add VITE_GEMINI_API_KEY to .env / Netlify env, then redeploy.')
   }
 }
 const GEMINI_VISION_ENABLED = false
@@ -1272,26 +1265,6 @@ function mapGeminiCallType(reason) {
       `[Gemini] Myra chat tier=${tier} reason=${reason || 'default'} chain=${models.join(' → ')}`,
     )
 
-    if (USE_API_PROXY) {
-      const payload = await askGeminiViaProxy({
-        userPrompt,
-        systemInstruction: MYRA_SYSTEM_PROMPT,
-        models,
-        imagePart,
-        generationConfig,
-      })
-
-      void recordGeminiUsage({
-        callType: mapGeminiCallType(reason),
-        model: payload.model,
-        promptTokens: payload.usage.promptTokens,
-        outputTokens: payload.usage.outputTokens,
-        totalTokens: payload.usage.totalTokens,
-      })
-
-      return payload.text
-    }
-
     const parts = []
     if (imagePart) {
       parts.push({
@@ -1305,7 +1278,7 @@ function mapGeminiCallType(reason) {
 
     const client = await getGeminiClient()
     if (!client) {
-      throw new Error('Gemini not configured — add VITE_GEMINI_API_KEY for local dev')
+      throw new Error('Gemini not configured — add VITE_GEMINI_API_KEY to .env / Netlify env')
     }
 
     let lastError = null
@@ -1585,9 +1558,7 @@ function mapGeminiCallType(reason) {
     }
     if (!isGeminiConfigured()) {
       console.error(
-        import.meta.env.PROD
-          ? '[Jarvis] Gemini proxy unavailable — Netlify me GEMINI_API_KEY set karke redeploy karo'
-          : '[Jarvis] Gemini missing — add VITE_GEMINI_API_KEY to .env for local dev',
+        '[Jarvis] Gemini missing — add VITE_GEMINI_API_KEY to .env / Netlify env, then redeploy.',
       )
       return false
     }

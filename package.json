@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:gemini-proxy": "node scripts/test-gemini-proxy.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

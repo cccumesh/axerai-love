@@ -1,17 +1,12 @@
-const REQUIRED_ANY = [
-  ['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY'],
-]
+const REQUIRED = ['VITE_GEMINI_API_KEY']
 
-const RECOMMENDED_ANY = [
-  ['ELEVENLABS_API_KEY', 'VITE_ELEVENLABS_API_KEY'],
-  ['ELEVENLABS_VOICE_ID', 'VITE_ELEVENLABS_VOICE_ID'],
-]
+const RECOMMENDED = ['VITE_ELEVENLABS_API_KEY', 'VITE_ELEVENLABS_VOICE_ID']
 
 const OPTIONAL = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']
 const DASHBOARD_OPTIONAL = ['VITE_DASHBOARD_PASSWORD', 'VITE_DASHBOARD_PATH']
 
-function hasAny(keys) {
-  return keys.some((key) => String(process.env[key] ?? '').trim())
+function has(key) {
+  return Boolean(String(process.env[key] ?? '').trim())
 }
 
 if (process.env.NETLIFY !== 'true') {
@@ -19,32 +14,28 @@ if (process.env.NETLIFY !== 'true') {
   process.exit(0)
 }
 
-const missing = REQUIRED_ANY.filter((group) => !hasAny(group))
+const missing = REQUIRED.filter((key) => !has(key))
 
 if (missing.length) {
   console.error('\n[Axerai] Netlify build blocked — missing environment variables:\n')
-  for (const group of missing) {
-    console.error(`  • ${group.join(' or ')}`)
+  for (const key of missing) {
+    console.error(`  • ${key}`)
   }
   console.error(
-    '\nFix: Netlify dashboard → Environment variables → add GEMINI_API_KEY (or VITE_GEMINI_API_KEY), then Deploys → Trigger deploy.\n',
+    '\nFix: Netlify → Environment variables → add VITE_GEMINI_API_KEY (Build scope), then Deploys → Trigger deploy.\n',
   )
   process.exit(1)
 }
 
-if (hasAny(['VITE_GEMINI_API_KEY']) && !hasAny(['GEMINI_API_KEY'])) {
-  console.warn('[verify-netlify-env] Tip: rename VITE_GEMINI_API_KEY → GEMINI_API_KEY so keys stay off the public bundle.')
-}
-
-const missingRecommended = RECOMMENDED_ANY.filter((group) => !hasAny(group))
+const missingRecommended = RECOMMENDED.filter((key) => !has(key))
 if (missingRecommended.length) {
   console.warn('[verify-netlify-env] Optional — ElevenLabs keys missing; Myra will use browser TTS:')
-  for (const group of missingRecommended) {
-    console.warn(`  • ${group.join(' or ')}`)
+  for (const key of missingRecommended) {
+    console.warn(`  • ${key}`)
   }
 }
 
-const missingOptional = OPTIONAL.filter((key) => !String(process.env[key] ?? '').trim())
+const missingOptional = OPTIONAL.filter((key) => !has(key))
 if (missingOptional.length) {
   console.warn('[verify-netlify-env] Optional — Supabase keys missing; ledger/dashboard off:')
   for (const key of missingOptional) {
@@ -52,7 +43,7 @@ if (missingOptional.length) {
   }
 }
 
-const missingDashboard = DASHBOARD_OPTIONAL.filter((key) => !String(process.env[key] ?? '').trim())
+const missingDashboard = DASHBOARD_OPTIONAL.filter((key) => !has(key))
 if (missingDashboard.length) {
   console.warn('[verify-netlify-env] Dashboard lock — set secret path + password on Netlify:')
   for (const key of missingDashboard) {
@@ -60,4 +51,4 @@ if (missingDashboard.length) {
   }
 }
 
-console.log('[verify-netlify-env] Server API keys OK — production build can proceed.')
+console.log('[verify-netlify-env] Client API keys OK — production build can proceed.')

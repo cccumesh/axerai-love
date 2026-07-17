@@ -1,4 +1,3 @@
-import { askGeminiViaProxy, USE_API_PROXY } from './apiProxy.js'
 import { usageFromResponse } from './geminiUsage.js'
 import { SUMMARY_MODEL_CHAIN } from './geminiModels.js'
 
@@ -39,7 +38,7 @@ SCOPE: This scan's log only. Do not merge other scans. Do not add EMOTIONS, FACT
 let geminiClient = null
 
 async function getGeminiClient() {
-  if (USE_API_PROXY || !GEMINI_API_KEY) return null
+  if (!GEMINI_API_KEY) return null
   if (!geminiClient) {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     geminiClient = new GoogleGenerativeAI(GEMINI_API_KEY)
@@ -48,7 +47,7 @@ async function getGeminiClient() {
 }
 
 function isSummarizeConfigured() {
-  return USE_API_PROXY || Boolean(GEMINI_API_KEY)
+  return Boolean(GEMINI_API_KEY)
 }
 
 function buildRoleContext(roleKey) {
@@ -95,20 +94,6 @@ export function condenseMyraLineForSummary(text, { isLast = false } = {}) {
 }
 
 async function requestSummary(userPrompt) {
-  if (USE_API_PROXY) {
-    const payload = await askGeminiViaProxy({
-      userPrompt,
-      systemInstruction: MYRA_SESSION_SUMMARY_SYSTEM,
-      models: SUMMARY_MODEL_CHAIN,
-      generationConfig: { temperature: 0.2, topP: 0.85, maxOutputTokens: 768 },
-    })
-    return {
-      text: payload.text,
-      model: payload.model,
-      usage: payload.usage,
-    }
-  }
-
   const client = await getGeminiClient()
   if (!client) return null
 

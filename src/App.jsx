@@ -952,7 +952,6 @@ function App() {
   const [arPreviewStream, setArPreviewStream] = useState(null)
   const [arCameraProfile, setArCameraProfile] = useState(null)
   const [jarvisUiReady, setJarvisUiReady] = useState(false)
-  const [myraReplyLine, setMyraReplyLine] = useState('')
   const [composeText, setComposeText] = useState('')
   const [userImagePreview, setUserImagePreview] = useState(null)
   const [composeMode, setComposeMode] = useState(null)
@@ -1336,8 +1335,6 @@ function App() {
       }
       const line = pickMyraErrorLine(situation)
       console.info('[Myra] offline:', situation, '—', getMyraErrorTriggerNote(situation))
-      setMyraReplyLine(prepareMyraSpeechText(line))
-      setJarvisUiReady(true)
       setIsAiThinking(true)
       speakMyraReply(line, onDone)
     },
@@ -1527,10 +1524,6 @@ function mapGeminiCallType(reason) {
 
   const deliverMyraGeminiResponse = useCallback(
     (fullResponse, afterSpeech) => {
-      const caption = prepareMyraSpeechText(fullResponse)
-      if (caption) setMyraReplyLine(caption)
-      setJarvisUiReady(true)
-
       const onSpeechDone = async () => {
         setJarvisUiReady(true)
         await afterSpeech?.()
@@ -1576,7 +1569,6 @@ function mapGeminiCallType(reason) {
       }
 
       pauseMicForGemini()
-      setMyraReplyLine('')
 
       try {
         await persistHistoryEntry('user', trimmed || '[image shared]')
@@ -2475,10 +2467,6 @@ function mapGeminiCallType(reason) {
       isVerifiedRef.current = true
       setShowScanGuide(false)
       setArError(null)
-      setJarvisUiReady(true)
-      jarvisActiveRef.current = true
-      setComposeMode('keyboard')
-      composeModeRef.current = 'keyboard'
 
       ensureMyraWelcome({
         delayMs: targetVideoDoneRef.current ? 0 : WELCOME_AFTER_VERIFY_FALLBACK_MS,
@@ -2571,7 +2559,6 @@ function mapGeminiCallType(reason) {
     userImageRef.current = null
     setUserImagePreview(null)
     setJarvisUiReady(false)
-    setMyraReplyLine('')
     setExperienceViewMode('ar')
     stopJarvisMode()
     stopAllCameraStreams()
@@ -3148,18 +3135,6 @@ function mapGeminiCallType(reason) {
                   {arError}
                 </div>
               )}
-
-              {isVerified && (myraReplyLine || isAiThinking) ? (
-                <div
-                  className="myra-reply-bubble myra-compose-wrap--dock-clear absolute z-[49] hud-inset-bottom"
-                  aria-live="polite"
-                >
-                  {isAiThinking && !myraReplyLine ? (
-                    <p className="myra-reply-bubble__thinking">Myra soch rahi hai…</p>
-                  ) : null}
-                  {myraReplyLine ? <p className="myra-reply-bubble__text">{myraReplyLine}</p> : null}
-                </div>
-              ) : null}
 
               {isVerified && jarvisUiReady && composeMode === 'keyboard' && (
                 <div className="myra-compose-wrap myra-compose-wrap--dock-clear absolute z-50 hud-inset-bottom">

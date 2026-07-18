@@ -46,8 +46,21 @@ export function initAxeraiMobileShell() {
   tryLockPortrait()
   document.addEventListener('pointerdown', tryLockPortrait, { once: true, passive: true })
 
+  /** Phones only — laptop/desktop is always landscape, never show rotate overlay there. */
+  const isPhoneShell = () => {
+    const ua = navigator.userAgent || ''
+    const mobileUa = /Android|iPhone|iPod|Mobile/i.test(ua)
+    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches
+    const touchPhone = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 920
+    return Boolean(mobileUa || (coarse && touchPhone))
+  }
+
   /** Device orientation (not viewport) — keyboard must not trigger landscape UI. */
   const syncDeviceLandscape = () => {
+    if (!isPhoneShell()) {
+      document.documentElement.classList.remove('axerai-device-landscape')
+      return
+    }
     const type = screen.orientation?.type ?? ''
     const angle = typeof window.orientation === 'number' ? Math.abs(window.orientation) : 0
     const landscape = type.startsWith('landscape') || angle === 90

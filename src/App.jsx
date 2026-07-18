@@ -103,10 +103,9 @@ const MINDAR_TARGET = '/targets.mind'
 const INTRO_LOADING_BG = '/images/richera-loading.png'
 /** Roman Hinglish transcript — hi-IN returns Devanagari (अ आ) on most phones */
 const SPEECH_RECO_LANG = 'en-IN'
-/** Pause after speech ends before auto-send (live mic) */
-const LIVE_MIC_SILENCE_MS = 2800
-/** Mic energy must stay low this long after last heard voice */
-const LIVE_MIC_VOICE_TAIL_MS = 650
+/** After transcript text stops changing, auto-send (ignore background noise) */
+const LIVE_MIC_SILENCE_MS = 2200
+/** Visual energy only — does not gate send */
 const LIVE_MIC_VOICE_ENERGY = 20
 /** If target video is stuck on Safari, still start Myra welcome after verify */
 const WELCOME_AFTER_VERIFY_FALLBACK_MS = 4500
@@ -1724,15 +1723,6 @@ function mapGeminiCallType(reason) {
     }
   }, [])
 
-  const isLiveMicVoiceActive = useCallback(() => {
-    const node = liveMicAnalyserRef.current
-    if (!node) return false
-    const bins = new Uint8Array(node.frequencyBinCount)
-    node.getByteFrequencyData(bins)
-    const avg = bins.reduce((sum, value) => sum + value, 0) / Math.max(1, bins.length)
-    return avg > LIVE_MIC_VOICE_ENERGY
-  }, [])
-
   const rescheduleLiveMicSend = useCallback(() => {
     clearLiveMicSilenceTimer()
     liveMicSilenceTimerRef.current = setTimeout(() => {
@@ -1755,13 +1745,10 @@ function mapGeminiCallType(reason) {
       return
     }
 
-    const now = Date.now()
-    const quietFor = now - Math.max(liveMicLastVoiceAtRef.current, liveMicLastSpeechAtRef.current)
-
-    if (liveMicPendingInterimRef.current || quietFor < LIVE_MIC_SILENCE_MS || isLiveMicVoiceActive()) {
-      if (isLiveMicVoiceActive()) {
-        liveMicLastVoiceAtRef.current = now
-      }
+    // Send when transcript text is unchanged for LIVE_MIC_SILENCE_MS.
+    // Background noise must NOT delay send (voice energy is visual-only).
+    const quietFor = Date.now() - liveMicLastSpeechAtRef.current
+    if (quietFor < LIVE_MIC_SILENCE_MS) {
       rescheduleLiveMicSend()
       return
     }
@@ -1775,7 +1762,7 @@ function mapGeminiCallType(reason) {
     setLiveTranscript('')
 
     sendMyraUserMessageRef.current(text)
-  }, [clearLiveMicSilenceTimer, isLiveMicVoiceActive, rescheduleLiveMicSend])
+  }, [clearLiveMicSilenceTimer, rescheduleLiveMicSend])
 
   useEffect(() => {
     flushLiveMicUtteranceRef.current = flushLiveMicUtterance
@@ -1821,25 +1808,9 @@ function mapGeminiCallType(reason) {
         })
         setVoiceLevels(levels)
 
+        // Voice energy drives the heart visual only — never resets the send timer.
         if (avg > LIVE_MIC_VOICE_ENERGY) {
           liveMicLastVoiceAtRef.current = Date.now()
-          clearLiveMicSilenceTimer()
-        } else if (
-          liveMicDisplayRef.current.trim() &&
-          composeModeRef.current === 'liveMic' &&
-          !jarvisBusyRef.current &&
-          !aiSpeakingRef.current &&
-          !liveMicSilenceTimerRef.current
-        ) {
-          const quietFor = Date.now() - liveMicLastVoiceAtRef.current
-          const sinceSpeech = Date.now() - liveMicLastSpeechAtRef.current
-          if (
-            quietFor >= LIVE_MIC_VOICE_TAIL_MS &&
-            sinceSpeech >= LIVE_MIC_SILENCE_MS &&
-            !liveMicPendingInterimRef.current
-          ) {
-            rescheduleLiveMicSend()
-          }
         }
 
         liveMicRafRef.current = requestAnimationFrame(tick)
@@ -1848,7 +1819,7 @@ function mapGeminiCallType(reason) {
     } catch (error) {
       console.warn('[Jarvis] Live mic analyser failed:', error)
     }
-  }, [clearLiveMicSilenceTimer, rescheduleLiveMicSend])
+  }, [])
 
   const startLiveMicMode = useCallback(async ({ softRestart = false } = {}) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -1921,12 +1892,13 @@ function mapGeminiCallType(reason) {
       const display = `${committed}${interim}`.trim()
       if (!display) return
 
+      const previous = liveMicDisplayRef.current
       liveMicFinalRef.current = committed.trim()
       liveMicDisplayRef.current = display
       liveMicPendingInterimRef.current = hasInterim
-      liveMicLastSpeechAtRef.current = Date.now()
-      if (hasInterim || isLiveMicVoiceActive()) {
-        liveMicLastVoiceAtRef.current = Date.now()
+      // Only restart the send clock when transcript text actually changes.
+      if (display !== previous) {
+        liveMicLastSpeechAtRef.current = Date.now()
       }
       setLiveTranscript(display)
       setIsListening(true)
@@ -1990,8 +1962,6 @@ function mapGeminiCallType(reason) {
     }
   }, [
     ensureMicPermission,
-    flushLiveMicUtterance,
-    isLiveMicVoiceActive,
     scheduleLiveMicSend,
     startLiveMicAnalyser,
     stopLiveMicMode,
@@ -3239,7 +3209,7 @@ function mapGeminiCallType(reason) {
                     ) : null}
                   </div>
                   <div
-                    className={`myra-live-mic-capsule${isListening ? ' myra-live-mic-capsule--active' : ''}`}
+                    className={`myra-live-mic-heart${isListening ? ' myra-live-mic-heart--active' : ''}`}
                     style={{
                       '--voice-energy': (
                         voiceLevels.reduce((sum, level) => sum + level, 0) / voiceLevels.length
@@ -3247,9 +3217,12 @@ function mapGeminiCallType(reason) {
                     }}
                     aria-hidden
                   >
-                    <span className="myra-live-mic-capsule__liquid" />
-                    <span className="myra-live-mic-capsule__blob myra-live-mic-capsule__blob--1" />
-                    <span className="myra-live-mic-capsule__blob myra-live-mic-capsule__blob--2" />
+                    <span className="myra-live-mic-heart__core">
+                      <span className="myra-live-mic-heart__liquid" />
+                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--1" />
+                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--2" />
+                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--3" />
+                    </span>
                   </div>
                 </div>
               )}

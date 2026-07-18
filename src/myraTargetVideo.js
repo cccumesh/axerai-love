@@ -113,21 +113,37 @@ export function mountTargetAnchorVideo({ anchor, anchorGroup, onEnded, onCardTra
     finished = true
     clearRetryTimer()
     clearWatchdog()
-    if (playAttempted || pendingTargetFound) onEnded?.()
 
-    const fadeMs = 320
+    // Soft handoff: fade plane first, then notify — avoids camera black frames on mobile GPUs.
+    const fadeMs = 280
     const start = performance.now()
+    let notified = false
+    const notifyOnce = () => {
+      if (notified) return
+      notified = true
+      if (playAttempted || pendingTargetFound) onEnded?.()
+    }
+
     const fadeStep = (now) => {
+      if (disposed) {
+        notifyOnce()
+        return
+      }
       const t = Math.min(1, (now - start) / fadeMs)
       material.opacity = 1 - t
+      if (t >= 0.55) notifyOnce()
       if (t < 1) {
         requestAnimationFrame(fadeStep)
         return
       }
       cleanupMesh()
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+      try {
+        video.pause()
+        video.removeAttribute('src')
+        video.load()
+      } catch {
+        // ignore teardown races on mobile Safari/Chrome
+      }
     }
     requestAnimationFrame(fadeStep)
   }

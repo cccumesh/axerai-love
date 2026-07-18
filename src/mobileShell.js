@@ -45,4 +45,29 @@ export function initAxeraiMobileShell() {
 
   tryLockPortrait()
   document.addEventListener('pointerdown', tryLockPortrait, { once: true, passive: true })
+
+  /** Device orientation (not viewport) — keyboard must not trigger landscape UI. */
+  const syncDeviceLandscape = () => {
+    const type = screen.orientation?.type ?? ''
+    const angle = typeof window.orientation === 'number' ? Math.abs(window.orientation) : 0
+    const landscape = type.startsWith('landscape') || angle === 90
+    document.documentElement.classList.toggle('axerai-device-landscape', landscape)
+  }
+
+  const syncKeyboardOpen = () => {
+    const active = document.activeElement
+    const typing =
+      active instanceof HTMLElement &&
+      active.matches('input, textarea, select, [contenteditable="true"]')
+    document.documentElement.classList.toggle('axerai-keyboard-open', typing)
+  }
+
+  syncDeviceLandscape()
+  syncKeyboardOpen()
+  window.addEventListener('orientationchange', syncDeviceLandscape)
+  screen.orientation?.addEventListener?.('change', syncDeviceLandscape)
+  document.addEventListener('focusin', syncKeyboardOpen)
+  document.addEventListener('focusout', () => {
+    window.setTimeout(syncKeyboardOpen, 80)
+  })
 }

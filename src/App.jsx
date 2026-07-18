@@ -549,10 +549,30 @@ function MindARSession({
   }, [showMyra])
   const videoPhaseActiveRef = useRef(true)
   const cardTrackHandlerRef = useRef(onCardTracked)
+  const onTargetVideoEndedRef = useRef(onTargetVideoEnded)
+  const onReleasePreviewRef = useRef(onReleasePreview)
+  const onErrorRef = useRef(onError)
+  const onSessionReadyRef = useRef(onSessionReady)
 
   useEffect(() => {
     cardTrackHandlerRef.current = onCardTracked
   }, [onCardTracked])
+
+  useEffect(() => {
+    onTargetVideoEndedRef.current = onTargetVideoEnded
+  }, [onTargetVideoEnded])
+
+  useEffect(() => {
+    onReleasePreviewRef.current = onReleasePreview
+  }, [onReleasePreview])
+
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  useEffect(() => {
+    onSessionReadyRef.current = onSessionReady
+  }, [onSessionReady])
 
   const getMindarVideo = useCallback(() => {
     const video = mindarVideoRef.current
@@ -627,10 +647,10 @@ function MindARSession({
               setTargetVideoPlaying(false)
               const wrapper = anchor.group?.userData?.wrapper
               if (wrapper && showMyraRef.current) wrapper.visible = true
-              disposeTargetVideo?.()
+              // Keep dispose for unmount only — finish() already fades + cleans the mesh.
               disposeTargetVideo = null
               attachCardTrackHandler()
-              onTargetVideoEnded?.()
+              onTargetVideoEndedRef.current?.()
             },
           })
         } else {
@@ -653,7 +673,7 @@ function MindARSession({
           await startMindARWithPreviewStream(mindarThree, container, previewStream)
         } else {
           console.warn('[MindAR] scan stream inactive — opening camera directly')
-          onReleasePreview?.()
+          onReleasePreviewRef.current?.()
           await mindarThree.start()
           mindarThree.resize()
           const mindarVideo = container.querySelector('video')
@@ -679,7 +699,7 @@ function MindARSession({
         )
 
         if (sessionGen.id === mySession) {
-          onSessionReady?.()
+          onSessionReadyRef.current?.()
         }
 
         if (!active || sessionGen.id !== mySession) {
@@ -697,7 +717,7 @@ function MindARSession({
       } catch (error) {
         if (!active || sessionGen.id !== mySession) return
         console.error('[MindAR] session failed', error)
-        onError?.(
+        onErrorRef.current?.(
           error instanceof Error
             ? error.message
             : 'AR initialization failed',
@@ -720,7 +740,8 @@ function MindARSession({
       softTeardownMindAR(mindarThree, keepCameraAlive)
       if (container) container.replaceChildren()
     }
-  }, [previewStream, cameraProfile, onReleasePreview, onError, onSessionReady, onTargetVideoEnded, onCardTracked, notifyCardTracked])
+    // Only remount when the camera stream/profile changes — not when chat/welcome callbacks update.
+  }, [previewStream, cameraProfile, notifyCardTracked])
 
   return (
     <div
@@ -3024,7 +3045,7 @@ function mapGeminiCallType(reason) {
           <span className="axerai-orientation-lock__icon" aria-hidden="true">
             ↻
           </span>
-          <p>Phone seedha pakdo — portrait mode mein Myra best chalti hai.</p>
+          <p>Hold your phone upright — Myra works best in portrait.</p>
         </div>
         <div className="axerai-bg pointer-events-none absolute inset-0" />
         <div className="axerai-grid pointer-events-none absolute inset-0" />

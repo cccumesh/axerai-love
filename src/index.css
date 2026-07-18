@@ -84,10 +84,17 @@ body {
   opacity: 0.9;
 }
 
-@media (orientation: landscape) and (max-height: 520px) {
-  .axerai-orientation-lock {
-    display: flex;
-  }
+/*
+  Do NOT use CSS orientation alone — when the on-screen keyboard opens,
+  viewport height collapses and width > height, so the browser falsely
+  reports landscape. Real device orientation is set via JS on <html>.
+*/
+html.axerai-device-landscape .axerai-orientation-lock {
+  display: flex;
+}
+
+html.axerai-keyboard-open .axerai-orientation-lock {
+  display: none !important;
 }
 
 /* Phone-first shell — full screen on every device */

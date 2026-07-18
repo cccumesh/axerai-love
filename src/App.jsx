@@ -33,6 +33,7 @@ import {
   resolveMyraChatModels,
 } from './geminiModels.js'
 import {
+  ensureMobileAudioUnlocked,
   isElevenLabsConfigured,
   speakWithElevenLabs,
   unlockMobileSpeechAudio,
@@ -1006,6 +1007,8 @@ function App() {
 
   const grantStartupAccess = useCallback(async () => {
     requestGeolocationInBackground()
+    // Same tap that allows camera also unlocks iPhone audio (no separate sound button).
+    await ensureMobileAudioUnlocked({ force: true })
     unlockMobileSpeechAudio({ force: true, speechPing: true })
 
     const stream = await acquireStartupStream()
@@ -1298,7 +1301,7 @@ function App() {
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
     pauseLiveMicCapture()
-    unlockMobileSpeechAudio({ force: true })
+    await ensureMobileAudioUnlocked({ force: true })
     aiSpeakingRef.current = true
 
     let speechFinished = false

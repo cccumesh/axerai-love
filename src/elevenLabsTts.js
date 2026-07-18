@@ -28,6 +28,9 @@ export function getElevenLabsConfigSummary() {
 let mobileAudioPrimed = false
 let primedAudioEl = null
 let sharedAudioCtx = null
+let keepAliveOsc = null
+let keepAliveGain = null
+let unlockInFlight = null
 
 const SILENT_WAV =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
@@ -45,65 +48,109 @@ function getPrimedAudioElement() {
   if (!primedAudioEl) {
     primedAudioEl = new Audio()
     primedAudioEl.setAttribute('playsinline', '')
+    primedAudioEl.setAttribute('webkit-playsinline', '')
     primedAudioEl.playsInline = true
     primedAudioEl.preload = 'auto'
   }
   return primedAudioEl
 }
 
-/** Call on user tap so iOS allows ElevenLabs playback after async Gemini. */
-export function primeMobileAudio({ force = false } = {}) {
-  if (mobileAudioPrimed && !force) return
-
+/** Keep Web Audio session alive on iPhone after first gesture — no extra "tap for sound". */
+function startSilentKeepAlive(ctx) {
+  if (!ctx || keepAliveOsc) return
   try {
-    getSharedAudioContext()?.resume().catch(() => {})
-
-    const audio = getPrimedAudioElement()
-    audio.muted = true
-    audio.src = SILENT_WAV
-    const playPromise = audio.play()
-    if (playPromise) {
-      playPromise
-        .then(() => {
-          mobileAudioPrimed = true
-          audio.pause()
-          audio.currentTime = 0
-          audio.muted = false
-        })
-        .catch((error) => {
-          console.warn('[ElevenLabs] Mobile audio prime failed:', error?.name || error)
-        })
-    } else {
-      mobileAudioPrimed = true
-    }
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    gain.gain.value = 0.00001
+    osc.frequency.value = 440
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(0)
+    keepAliveOsc = osc
+    keepAliveGain = gain
   } catch (error) {
-    console.warn('[ElevenLabs] Mobile audio prime error:', error)
+    console.warn('[Audio] keep-alive failed:', error?.name || error)
   }
 }
 
-/** Refresh iOS/Safari audio + speechSynthesis unlock (restored after cleanup). */
+/**
+ * Unlock iPhone audio on any existing user gesture (camera allow / first touch).
+ * Keeps a silent AudioContext running so TTS still works after Gemini delay.
+ */
+export async function ensureMobileAudioUnlocked({ force = false } = {}) {
+  if (mobileAudioPrimed && !force) {
+    const ctx = getSharedAudioContext()
+    if (ctx?.state === 'suspended') {
+      try {
+        await ctx.resume()
+      } catch {
+        // ignore
+      }
+    }
+    return mobileAudioPrimed
+  }
+
+  if (unlockInFlight) return unlockInFlight
+
+  unlockInFlight = (async () => {
+    try {
+      const ctx = getSharedAudioContext()
+      if (ctx?.state === 'suspended') {
+        await ctx.resume()
+      }
+
+      const audio = getPrimedAudioElement()
+      audio.muted = true
+      audio.volume = 0.01
+      audio.src = SILENT_WAV
+      await audio.play()
+      audio.pause()
+      audio.currentTime = 0
+      audio.muted = false
+      audio.volume = 1
+
+      if (ctx) startSilentKeepAlive(ctx)
+
+      try {
+        window.speechSynthesis?.resume?.()
+      } catch {
+        // ignore
+      }
+
+      mobileAudioPrimed = true
+      return true
+    } catch (error) {
+      console.warn('[Audio] unlock failed:', error?.name || error)
+      return false
+    } finally {
+      unlockInFlight = null
+    }
+  })()
+
+  return unlockInFlight
+}
+
+/** Call on user tap so iOS allows ElevenLabs playback after async Gemini. */
+export function primeMobileAudio({ force = false } = {}) {
+  void ensureMobileAudioUnlocked({ force })
+}
+
+/** Refresh iOS/Safari audio + speechSynthesis unlock (no extra tap UI). */
 export function unlockMobileSpeechAudio({ force = false, speechPing = false } = {}) {
-  primeMobileAudio({ force })
-
-  const synth = window.speechSynthesis
-  if (!synth) return
-
-  try {
-    synth.resume?.()
-  } catch {
-    // ignore
-  }
-
-  if (!speechPing) return
-
-  try {
-    const ping = new SpeechSynthesisUtterance('')
-    ping.volume = 0.01
-    ping.rate = 1.15
-    synth.speak(ping)
-  } catch {
-    // ignore
-  }
+  void ensureMobileAudioUnlocked({ force }).then((ok) => {
+    if (!ok || !speechPing) return
+    const synth = window.speechSynthesis
+    if (!synth) return
+    try {
+      synth.resume?.()
+      const ping = new SpeechSynthesisUtterance(' ')
+      ping.volume = 0.01
+      ping.rate = 1.2
+      synth.speak(ping)
+    } catch {
+      // ignore
+    }
+  })
 }
 
 export function stopElevenLabsSpeech() {
@@ -285,12 +332,14 @@ async function playBlob(blob, { onStart, onEnd, onError }) {
   }
 
   try {
-    if (isAppleMobileBrowser()) {
-      primeMobileAudio({ force: true })
+    await ensureMobileAudioUnlocked({ force: isAppleMobileBrowser() })
+    const ctx = getSharedAudioContext()
+    if (ctx?.state === 'suspended') {
+      await ctx.resume().catch(() => {})
     }
     connectTtsAudio(audio)
-    onStart?.()
     await audio.play()
+    onStart?.()
   } catch (error) {
     cleanup()
     const name = error instanceof Error ? error.name : 'PlaybackError'

@@ -187,14 +187,14 @@ const MYRA_ERROR_POOLS = {
   ],
 
   [MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL]: [
-    'Sorry veere — yeh bridge sirf do dilo ke liye hai.',
-    'Yeh gift already do phones pe locked hai.',
-    'Third guest nahi, yeh private magic hai.',
-    'Arre cute try! Par yeh RICHERA bridge sirf do devices ke liye — ek jo gift deta hai, ek jo paata hai. Tum third ho, door yahan band hai.',
-    'Heart Tree ne already do naam likh liye. Main third banda nahi ghusne deti — yeh un dono ka moment hai, samajh na.',
-    'Scan sahi hai, par seat full! Is card pe pehle se sender aur receiver connected hain. Unhi se baat karo, main unki hoon.',
-    'Oyee wait — yeh magic duo-only hai. Do phones, do dil, ek story. Teesra guest list pe nahi, maaf karna.',
-    'Card pehchaan liya, par Heart Tree bol rahi hai: capacity two. Tum late aa gaye is party mein — un dono ko hi milungi main.',
+    'Arre third wheel aa gaya! Sorry yaar, yeh ride sirf do seats ki hai.',
+    'Bhai VIP list pe nahi ho tum — pehle do log already VIP ban chuke.',
+    'Scan kiya? Cute. Par main third person wala drama nahi karti.',
+    'Oyee gatecrash attempt! Heart Tree bol rahi hai: “Do hi allowed, teesra bahar line mein.” Ja, popcorn leke unki love story dekh.',
+    'Wah try maar di boss! Par yeh RICHERA WiFi password sirf do phones ko mila hai. Tum… wrong OTP type kar rahe ho basically.',
+    'Card sahi hai, timing galat! Party already couple mode mein chal rahi hai. Main third guest ko coffee bhi nahi deti — bye bye comedy entry.',
+    'Arre softy, samajh: ek gift-wala, ek gift-paane-wala. Tum teesre number pe aake “Hello Myra” bol rahe ho — main toh has rahi hoon, seat toh nahi dungi.',
+    'Heart Tree ne do dil lock kar diye, teesra dil ko “seen” de diya. Ro mat — has, screenshot le, aur un dono ko roast kar dena mere taraf se.',
   ],
 
   [MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL]: [

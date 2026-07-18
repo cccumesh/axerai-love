@@ -3014,12 +3014,6 @@ function mapGeminiCallType(reason) {
       ) : null}
 
       <div className={`axerai-app relative flex h-[100dvh] h-[100svh] w-full flex-col overflow-hidden text-white${mainRevealed ? ' main-reveal--active' : ''}${introVisible ? ' axerai-app--during-intro' : ''}`}>
-        <div className="axerai-orientation-lock" aria-hidden="true">
-          <span className="axerai-orientation-lock__icon" aria-hidden="true">
-            ↻
-          </span>
-          <p>Hold your phone upright — Myra works best in portrait.</p>
-        </div>
         <div className="axerai-bg pointer-events-none absolute inset-0" />
         <div className="axerai-grid pointer-events-none absolute inset-0" />
         <div className="axerai-orb axerai-orb--1 pointer-events-none absolute" aria-hidden />

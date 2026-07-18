@@ -1,4 +1,46 @@
-/** Block pinch/double-tap zoom, text selection, and prefer portrait on the AR app. */
+/** Block pinch/double-tap zoom, text selection, and keep the AR app in portrait. */
+
+function isPhoneShell() {
+  const ua = navigator.userAgent || ''
+  const mobileUa = /Android|iPhone|iPod|Mobile/i.test(ua)
+  const coarse = window.matchMedia?.('(pointer: coarse)')?.matches
+  const touchPhone = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 920
+  return Boolean(mobileUa || (coarse && touchPhone))
+}
+
+function tryLockPortrait() {
+  if (!isPhoneShell()) return
+  const orientation = screen.orientation
+  if (!orientation?.lock) return
+  orientation.lock('portrait-primary').catch(() => {})
+  orientation.lock?.('portrait').catch(() => {})
+}
+
+/**
+ * If the OS still rotates (common on iPhone Safari), keep the app visually portrait
+ * by counter-rotating the root — no message overlay.
+ */
+function syncForcedPortrait() {
+  const root = document.documentElement
+  if (!isPhoneShell()) {
+    root.classList.remove('axerai-phone-landscape')
+    return
+  }
+
+  tryLockPortrait()
+
+  const type = screen.orientation?.type ?? ''
+  const angle = Number(screen.orientation?.angle ?? window.orientation ?? 0)
+  const landscape = type.startsWith('landscape') || Math.abs(angle) === 90 || Math.abs(angle) === 270
+  root.classList.toggle('axerai-phone-landscape', landscape)
+
+  // Match OS rotate direction so the UI stays upright (portrait) with no message.
+  let rotate = '90deg'
+  if (angle === 90 || type === 'landscape-primary') rotate = '-90deg'
+  if (angle === 270 || angle === -90 || type === 'landscape-secondary') rotate = '90deg'
+  root.style.setProperty('--axerai-lock-rotate', rotate)
+}
+
 export function initAxeraiMobileShell() {
   const blockMultiTouch = (event) => {
     if (event.touches?.length > 1) event.preventDefault()
@@ -9,7 +51,6 @@ export function initAxeraiMobileShell() {
   document.addEventListener('gestureend', (event) => event.preventDefault(), { passive: false })
   document.addEventListener('touchmove', blockMultiTouch, { passive: false })
 
-  // Safari double-tap zoom — ignore quick second touchend on non-input UI.
   let lastTouchEndAt = 0
   document.addEventListener(
     'touchend',
@@ -37,50 +78,18 @@ export function initAxeraiMobileShell() {
 
   document.addEventListener('dblclick', (event) => event.preventDefault(), { passive: false })
 
-  const tryLockPortrait = () => {
-    const orientation = screen.orientation
-    if (!orientation?.lock) return
-    orientation.lock('portrait-primary').catch(() => {})
-  }
-
   tryLockPortrait()
-  document.addEventListener('pointerdown', tryLockPortrait, { once: true, passive: true })
+  syncForcedPortrait()
 
-  /** Phones only — laptop/desktop is always landscape, never show rotate overlay there. */
-  const isPhoneShell = () => {
-    const ua = navigator.userAgent || ''
-    const mobileUa = /Android|iPhone|iPod|Mobile/i.test(ua)
-    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches
-    const touchPhone = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) <= 920
-    return Boolean(mobileUa || (coarse && touchPhone))
-  }
-
-  /** Device orientation (not viewport) — keyboard must not trigger landscape UI. */
-  const syncDeviceLandscape = () => {
-    if (!isPhoneShell()) {
-      document.documentElement.classList.remove('axerai-device-landscape')
-      return
-    }
-    const type = screen.orientation?.type ?? ''
-    const angle = typeof window.orientation === 'number' ? Math.abs(window.orientation) : 0
-    const landscape = type.startsWith('landscape') || angle === 90
-    document.documentElement.classList.toggle('axerai-device-landscape', landscape)
-  }
-
-  const syncKeyboardOpen = () => {
-    const active = document.activeElement
-    const typing =
-      active instanceof HTMLElement &&
-      active.matches('input, textarea, select, [contenteditable="true"]')
-    document.documentElement.classList.toggle('axerai-keyboard-open', typing)
-  }
-
-  syncDeviceLandscape()
-  syncKeyboardOpen()
-  window.addEventListener('orientationchange', syncDeviceLandscape)
-  screen.orientation?.addEventListener?.('change', syncDeviceLandscape)
-  document.addEventListener('focusin', syncKeyboardOpen)
-  document.addEventListener('focusout', () => {
-    window.setTimeout(syncKeyboardOpen, 80)
+  document.addEventListener('pointerdown', tryLockPortrait, { passive: true })
+  window.addEventListener('orientationchange', () => {
+    tryLockPortrait()
+    window.setTimeout(syncForcedPortrait, 50)
+    window.setTimeout(syncForcedPortrait, 300)
   })
+  screen.orientation?.addEventListener?.('change', () => {
+    tryLockPortrait()
+    syncForcedPortrait()
+  })
+  window.addEventListener('resize', syncForcedPortrait)
 }

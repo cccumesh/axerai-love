@@ -1,0 +1,9 @@
+{
+  "name": "Axerai Love",
+  "short_name": "Axerai",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05050c",
+  "theme_color": "#05050c"
+}

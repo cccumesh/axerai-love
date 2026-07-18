@@ -644,9 +644,11 @@ function MindARSession({
             onEnded: () => {
               if (!active || sessionGen.id !== mySession) return
               videoPhaseActiveRef.current = false
+              setMyraSlotActive(true)
               setTargetVideoPlaying(false)
+              // After card video, always show Myra (verify pass/fail does not matter).
               const wrapper = anchor.group?.userData?.wrapper
-              if (wrapper && showMyraRef.current) wrapper.visible = true
+              if (wrapper) wrapper.visible = true
               // Keep dispose for unmount only — finish() already fades + cleans the mesh.
               disposeTargetVideo = null
               attachCardTrackHandler()
@@ -758,7 +760,7 @@ function MindARSession({
           key={MYRA_MODEL_PATH}
           anchorGroup={anchorGroup}
           isTalking={isTalking}
-          revealed={showMyra && !targetVideoPlaying}
+          revealed={!targetVideoPlaying && (showMyra || myraSlotActive)}
         />
       ) : null}
     </div>
@@ -2433,6 +2435,7 @@ function mapGeminiCallType(reason) {
   }, [])
 
   const handleTargetVideoEnded = useCallback(() => {
+    // Always mark video done so Myra can appear even if verify failed / still running.
     setTargetVideoDone(true)
     targetVideoDoneRef.current = true
     if (!isVerifiedRef.current) return
@@ -3091,7 +3094,7 @@ function mapGeminiCallType(reason) {
                     onTargetVideoEnded={handleTargetVideoEnded}
                     onCardTracked={handleCardTracked}
                     playTargetVideo
-                    showMyra={isVerified && mindarReady}
+                    showMyra={mindarReady && (isVerified || targetVideoDone)}
                     isTalking={isMyraTalking}
                   />
                 </div>

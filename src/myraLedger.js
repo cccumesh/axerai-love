@@ -150,10 +150,26 @@ function buildPreviousConversationBlock(role, senderThread, receiverThread) {
   return senderBlock || 'No previous conversation saved for this product code yet.'
 }
 
-function resolveSessionRole(senderDeviceId, currentDeviceId, hasSenderThread) {
-  if (!hasSenderThread) return 'SENDER'
-  if (currentDeviceId === senderDeviceId) return 'SENDER'
-  return 'RECEIVER'
+/**
+ * Max 2 devices per product code:
+ * 1st = SENDER, 2nd = RECEIVER, 3rd+ = rejected.
+ */
+function resolveSessionAccess(senderThread, receiverThread, currentDeviceId) {
+  const senderDeviceId = String(senderThread?.device_id ?? '').trim()
+  const receiverDeviceId = String(receiverThread?.device_id ?? '').trim()
+  const hasSender = hasActiveSenderThread(senderThread)
+
+  if (!hasSender || !senderDeviceId) {
+    return { allowed: true, role: 'SENDER' }
+  }
+  if (currentDeviceId === senderDeviceId) {
+    return { allowed: true, role: 'SENDER' }
+  }
+  // Receiver seat free, or same receiver device returning
+  if (!receiverDeviceId || currentDeviceId === receiverDeviceId) {
+    return { allowed: true, role: 'RECEIVER' }
+  }
+  return { allowed: false, role: null, reason: 'PAIR_FULL' }
 }
 
 function parseConversationLines(conversation) {
@@ -500,7 +516,9 @@ export async function prefetchLedgerMemory(verificationCode) {
   cachedReceiverThread = null
   cachedVerificationCode = verificationCode || ''
 
-  if (!supabase || !verificationCode) return
+  if (!supabase || !verificationCode) {
+    return { allowed: true, role: 'SENDER' }
+  }
 
   const deviceId = getDeviceId()
   await ensureThreadRows(verificationCode)
@@ -514,23 +532,31 @@ export async function prefetchLedgerMemory(verificationCode) {
   if (error) {
     console.warn('[Ledger] prefetch failed:', error.message)
     ledgerMemoryText = `Product code: ${verificationCode}.`
-    return
+    return { allowed: true, role: 'SENDER', degraded: true }
   }
 
   const senderThread = (threads ?? []).find((row) => row.role === 'sender') ?? null
   const receiverThread = (threads ?? []).find((row) => row.role === 'receiver') ?? null
-  const senderDeviceId = String(senderThread?.device_id ?? '').trim() || deviceId
+  const access = resolveSessionAccess(senderThread, receiverThread, deviceId)
 
-  sessionRole = resolveSessionRole(
-    senderDeviceId,
-    deviceId,
-    hasActiveSenderThread(senderThread),
-  )
+  if (!access.allowed) {
+    cachedSenderThread = senderThread
+    cachedReceiverThread = receiverThread
+    logLedger('PAIR FULL — third device rejected', {
+      code: verificationCode,
+      device: deviceId.slice(0, 8) + '…',
+      sender: String(senderThread?.device_id ?? '').slice(0, 8) + '…',
+      receiver: String(receiverThread?.device_id ?? '').slice(0, 8) + '…',
+    })
+    return { allowed: false, reason: 'PAIR_FULL' }
+  }
+
+  sessionRole = access.role
 
   if (sessionRole === 'RECEIVER') {
     logLedger('RECEIVER device', {
       yourDevice: deviceId.slice(0, 8) + '…',
-      senderDevice: String(senderDeviceId).slice(0, 8) + '…',
+      senderDevice: String(senderThread?.device_id ?? '').slice(0, 8) + '…',
     })
   } else {
     logLedger('SENDER device', { device: deviceId.slice(0, 8) + '…' })
@@ -548,6 +574,8 @@ export async function prefetchLedgerMemory(verificationCode) {
     senderLines: parseConversationLines(senderThread?.conversation).length,
     receiverLines: parseConversationLines(receiverThread?.conversation).length,
   })
+
+  return { allowed: true, role: sessionRole }
 }
 
 async function appendSessionMarker(markerLine) {
@@ -596,6 +624,18 @@ export async function startLedgerScan(verificationCode) {
   }
 
   if (existing) {
+    const claimedDevice = String(existing.device_id ?? '').trim()
+    // Race guard: receiver/sender seat already taken by another phone
+    if (claimedDevice && claimedDevice !== deviceId) {
+      logLedger('PAIR FULL — seat already claimed', {
+        code: verificationCode,
+        role: roleKey,
+        claimed: claimedDevice.slice(0, 8) + '…',
+        you: deviceId.slice(0, 8) + '…',
+      })
+      return { rejected: true, reason: 'PAIR_FULL' }
+    }
+
     const scanNumber = (existing.scan_count ?? 0) + 1
     activeScanNumber = scanNumber
 

@@ -2442,8 +2442,20 @@ function mapGeminiCallType(reason) {
   const completeVerification = useCallback(
     async (verificationCode) => {
       if (isLedgerConfigured()) {
-        await prefetchLedgerMemory(verificationCode)
+        const access = await prefetchLedgerMemory(verificationCode)
+        if (access?.allowed === false) {
+          // Card is real, but this phone is a 3rd device — reject with Myra dialogue.
+          setShowScanGuide(true)
+          speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL)
+          return
+        }
+
         const ledgerScan = await startLedgerScan(verificationCode)
+        if (ledgerScan?.rejected) {
+          setShowScanGuide(true)
+          speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL)
+          return
+        }
         if (!ledgerScan) {
           speakMyraErrorLine(MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL)
         } else {

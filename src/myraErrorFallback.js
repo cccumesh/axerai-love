@@ -20,6 +20,8 @@ export const MYRA_ERROR_SITUATIONS = {
   SCAN_BAD_FRAME: 'scan_bad_frame',
   SCAN_GLITCH: 'scan_glitch',
   SCAN_MAGIC_ASLEEP: 'scan_magic_asleep',
+  /** 3rd+ device on a code that already has sender + receiver */
+  SCAN_PAIR_FULL: 'scan_pair_full',
 
   LEDGER_SAVE_FAIL: 'ledger_save_fail',
 
@@ -52,6 +54,7 @@ export const MYRA_ERROR_REPEAT_RISK = {
   [MYRA_ERROR_SITUATIONS.SCAN_BAD_FRAME]: 'high',
   [MYRA_ERROR_SITUATIONS.SCAN_GLITCH]: 'high',
   [MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP]: 'medium',
+  [MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL]: 'medium',
 
   [MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL]: 'once',
 
@@ -96,6 +99,8 @@ export const MYRA_ERROR_TRIGGERS = {
     'Scan: exception during verify capture',
   [MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP]:
     'Scan: verify magic not available (pre-scan)',
+  [MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL]:
+    'Scan: product code already linked to sender + receiver — third device blocked',
 
   [MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL]:
     'Post-scan: card verified but Heart Tree save failed',
@@ -179,6 +184,17 @@ const MYRA_ERROR_POOLS = {
     'Tum ready ho, main abhi stretch kar rahi hoon. Thoda ruk — phir card pehchaan lungi.',
     'Aaj crystal lazy mode mein hai. Thodi der baad scan kar, tab poori entry hogi.',
     'Connection weak lag raha hai jaise signal kam ho. Ek aur try kar, ho jayega.',
+  ],
+
+  [MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL]: [
+    'Sorry veere — yeh bridge sirf do dilo ke liye hai.',
+    'Yeh gift already do phones pe locked hai.',
+    'Third guest nahi, yeh private magic hai.',
+    'Arre cute try! Par yeh RICHERA bridge sirf do devices ke liye — ek jo gift deta hai, ek jo paata hai. Tum third ho, door yahan band hai.',
+    'Heart Tree ne already do naam likh liye. Main third banda nahi ghusne deti — yeh un dono ka moment hai, samajh na.',
+    'Scan sahi hai, par seat full! Is card pe pehle se sender aur receiver connected hain. Unhi se baat karo, main unki hoon.',
+    'Oyee wait — yeh magic duo-only hai. Do phones, do dil, ek story. Teesra guest list pe nahi, maaf karna.',
+    'Card pehchaan liya, par Heart Tree bol rahi hai: capacity two. Tum late aa gaye is party mein — un dono ko hi milungi main.',
   ],
 
   [MYRA_ERROR_SITUATIONS.LEDGER_SAVE_FAIL]: [

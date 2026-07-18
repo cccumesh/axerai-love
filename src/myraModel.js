@@ -31,7 +31,7 @@ export const IDLE_PLACEMENT = {
 
 export const MYRA_PLACEMENT = IDLE_PLACEMENT
 
-const CROSSFADE_SEC = 0.25
+const CROSSFADE_SEC = 0.35
 const HIPS_RE = /mixamorig:?Hips$/i
 const MOUTH_KEY_PATTERNS = [/mouth/i, /open/i, /jaw/i, /lip/i, /morph/i, /shape/i, /^key$/i, /^key\s*1$/i]
 const HEAD_LIP_BONES = [/mixamorig:?Head$/i]
@@ -121,10 +121,11 @@ function applyPlacement(wrapper, placement = IDLE_PLACEMENT) {
   wrapper.scale.setScalar(scale)
 }
 
-function stopAllTalkActions(actions) {
+/** Soft fade only — never hard-stop mid-blend (hard stop = T-pose flash). */
+function fadeOutTalkActions(actions, duration = CROSSFADE_SEC) {
   actions.talks?.forEach((talkAction) => {
-    talkAction.fadeOut(CROSSFADE_SEC)
-    talkAction.stop()
+    if (!talkAction?.isRunning?.()) return
+    talkAction.fadeOut(duration)
   })
   actions.activeTalk = null
 }
@@ -132,12 +133,20 @@ function stopAllTalkActions(actions) {
 function playIdle(actions, mixer) {
   const { idle } = actions
   if (!idle) return
-  stopAllTalkActions(actions)
-  idle
-    .reset()
-    .setLoop(LoopRepeat, Infinity)
-    .fadeIn(CROSSFADE_SEC)
-    .play()
+
+  // Crossfade talk → idle. Do NOT call talkAction.stop() here — that snaps to bind pose (T-pose).
+  fadeOutTalkActions(actions, CROSSFADE_SEC)
+
+  idle.enabled = true
+  idle.setLoop(LoopRepeat, Infinity)
+  if (!idle.isRunning()) {
+    idle.reset().play()
+  } else {
+    // Idle was faded out during talk — bring weight back without pose snap.
+    idle.setEffectiveTimeScale(1)
+  }
+  idle.setEffectiveWeight(1)
+  idle.fadeIn(CROSSFADE_SEC)
   mixer?.update(0)
 }
 
@@ -159,14 +168,21 @@ function playRandomTalking(actions, lastTalkIndexRef) {
   if (!talks?.length) return
 
   idle?.fadeOut(CROSSFADE_SEC)
-  stopAllTalkActions(actions)
 
   const index = pickRandomTalkIndex(talks.length, lastTalkIndexRef.current)
   if (index < 0) return
 
   lastTalkIndexRef.current = index
   const talkAction = talks[index]
-  talkAction.reset().setLoop(LoopRepeat, Infinity).fadeIn(CROSSFADE_SEC).play()
+
+  // Fade other talk clips out softly (no hard stop).
+  talks.forEach((other) => {
+    if (other !== talkAction && other?.isRunning?.()) {
+      other.fadeOut(CROSSFADE_SEC)
+    }
+  })
+
+  talkAction.reset().setLoop(LoopRepeat, Infinity).setEffectiveWeight(1).fadeIn(CROSSFADE_SEC).play()
   actions.activeTalk = talkAction
 
   console.info('[Myra] talking clip', TALK_PATHS[index] ?? index)

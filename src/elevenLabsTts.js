@@ -39,6 +39,13 @@ let currentBufferSource = null
 let currentObjectUrl = null
 /** If iOS blocks play(), retry once on the next user gesture. */
 let pendingHtmlPlay = null
+/**
+ * iPhone: TTS blob ready, waiting for Tap for sound.
+ * play() MUST start inside the pointerdown handler (same user gesture).
+ */
+let deferredTtsJob = null
+/** After one successful gesture play, later lines may autoplay. */
+let appleGestureUnlocked = false
 
 const SILENT_WAV =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
@@ -197,17 +204,112 @@ export function primeMobileAudio({ force = false } = {}) {
   void ensureMobileAudioUnlocked({ force })
 }
 
-async function flushPendingHtmlPlay() {
-  if (!pendingHtmlPlay) return
-  const job = pendingHtmlPlay
-  pendingHtmlPlay = null
-  try {
-    await playBlobViaHtmlAudio(job.blob, job.callbacks)
-  } catch (error) {
-    console.warn('[Audio] Pending TTS retry failed:', error)
-    job.callbacks?.onError?.(error instanceof Error ? error : new Error(String(error)))
+function clearDeferredTtsJob(reason) {
+  if (!deferredTtsJob) return
+  const job = deferredTtsJob
+  deferredTtsJob = null
+  notifyAudioNeedsTap(false)
+  if (reason === 'cancel') {
     job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
   }
+}
+
+/**
+ * Call from Tap for sound pointerdown ONLY — starts play() in the same gesture.
+ * This is the reliable iPhone path (autoplay after Gemini delay always fails).
+ */
+export function playQueuedTtsFromUserGesture() {
+  const ctx = getSharedAudioContext()
+  void ctx?.resume?.()
+
+  const job = deferredTtsJob || pendingHtmlPlay
+  if (!job?.blob) {
+    void ensureMobileAudioUnlocked({ force: true })
+    return false
+  }
+
+  deferredTtsJob = null
+  pendingHtmlPlay = null
+  notifyAudioNeedsTap(false)
+
+  const objectUrl = URL.createObjectURL(job.blob)
+  currentObjectUrl = objectUrl
+  const audio = getTtsAudioElement()
+  audio.muted = false
+  audio.volume = 1
+  audio.loop = false
+  audio.src = objectUrl
+  audio._objectUrl = objectUrl
+  currentAudio = audio
+
+  const cleanup = () => {
+    if (currentObjectUrl === objectUrl) {
+      URL.revokeObjectURL(objectUrl)
+      currentObjectUrl = null
+    }
+    audio._objectUrl = null
+    if (currentAudio === audio) currentAudio = null
+    currentAbort = null
+  }
+
+  audio.onended = () => {
+    disconnectTtsAudio()
+    cleanup()
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+  }
+  audio.onerror = () => {
+    disconnectTtsAudio()
+    cleanup()
+    const err = new Error('ElevenLabs audio playback failed')
+    job.callbacks?.onError?.(err)
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+  }
+
+  // Keep unlock loop warm for later lines.
+  const unlockEl = getUnlockAudioElement()
+  unlockEl.muted = false
+  unlockEl.volume = 0.01
+  unlockEl.loop = true
+  if (unlockEl.paused) {
+    unlockEl.src = SILENT_WAV
+    void unlockEl.play().catch(() => {})
+  }
+
+  startSpeechLipSync()
+  // Synchronous play() inside user gesture — required on iPhone.
+  const playPromise = audio.play()
+  appleGestureUnlocked = true
+  mobileAudioPrimed = true
+  job.callbacks?.onStart?.()
+
+  void playPromise.catch((error) => {
+    console.warn('[Audio] Gesture play failed:', error)
+    cleanup()
+    deferredTtsJob = job
+    notifyAudioNeedsTap(true)
+  })
+
+  return true
+}
+
+export function hasQueuedTtsForGesture() {
+  return Boolean(deferredTtsJob?.blob || pendingHtmlPlay?.blob)
+}
+
+function queueTtsBlobForUserGesture(blob, callbacks) {
+  return new Promise((resolve) => {
+    clearDeferredTtsJob('cancel')
+    deferredTtsJob = {
+      blob,
+      callbacks,
+      resolvePlay: resolve,
+    }
+    notifyAudioNeedsTap(true)
+    console.info('[Audio] iPhone — Tap for sound to play Myra voice')
+  })
 }
 
 /** Refresh iOS/Safari audio unlock. speechPing is Apple-only (Android makes tung-tung beeps). */
@@ -216,10 +318,14 @@ export function unlockMobileSpeechAudio({ force = false, speechPing = false } = 
   const ctx = getSharedAudioContext()
   void ctx?.resume?.()
 
-  void ensureMobileAudioUnlocked({ force }).then(async (ok) => {
-    await flushPendingHtmlPlay()
-    notifyAudioNeedsTap(Boolean(pendingHtmlPlay))
-    // Never speechSynthesis-ping on Android — OEM TTS clicks sound like "tung tung".
+  // Prefer sync gesture play for queued TTS (do not await unlock first).
+  if (hasQueuedTtsForGesture()) {
+    playQueuedTtsFromUserGesture()
+    return
+  }
+
+  void ensureMobileAudioUnlocked({ force }).then((ok) => {
+    notifyAudioNeedsTap(Boolean(pendingHtmlPlay || deferredTtsJob))
     if (!ok || !speechPing || !isAppleMobileBrowser()) return
     const synth = window.speechSynthesis
     if (!synth) return
@@ -255,6 +361,12 @@ function stopBufferSource() {
 export function stopElevenLabsSpeech() {
   disconnectTtsAudio()
   pendingHtmlPlay = null
+  if (deferredTtsJob) {
+    const job = deferredTtsJob
+    deferredTtsJob = null
+    notifyAudioNeedsTap(false)
+    job.resolvePlay?.()
+  }
   if (currentAbort) {
     currentAbort.abort()
     currentAbort = null
@@ -682,7 +794,10 @@ export async function logElevenLabsConnectionOnce() {
   }
 }
 
-export async function speakWithElevenLabs(text, { onStart, onEnd, onError } = {}) {
+export async function speakWithElevenLabs(
+  text,
+  { onStart, onEnd, onError, requireUserGesture = false } = {},
+) {
   if (!isElevenLabsConfigured()) {
     throw new Error('ElevenLabs is not configured')
   }
@@ -693,7 +808,27 @@ export async function speakWithElevenLabs(text, { onStart, onEnd, onError } = {}
     return
   }
 
-  stopElevenLabsSpeech()
+  // Don't wipe a queued tap-to-play from a prior line unless starting fresh audio fetch.
+  pendingHtmlPlay = null
+  if (deferredTtsJob) {
+    const job = deferredTtsJob
+    deferredTtsJob = null
+    notifyAudioNeedsTap(false)
+    job.resolvePlay?.()
+  }
+  if (currentAbort) {
+    currentAbort.abort()
+    currentAbort = null
+  }
+  stopBufferSource()
+  if (currentAudio) {
+    currentAudio.pause()
+    if (currentAudio._objectUrl) {
+      URL.revokeObjectURL(currentAudio._objectUrl)
+      currentAudio._objectUrl = null
+    }
+    currentAudio = null
+  }
 
   const controller = new AbortController()
   currentAbort = controller
@@ -702,6 +837,11 @@ export async function speakWithElevenLabs(text, { onStart, onEnd, onError } = {}
   if (!voiceIds.length) {
     throw new Error('No ElevenLabs voice available')
   }
+
+  // iPhone after Gemini delay: autoplay fails — always wait for Tap for sound
+  // until one gesture play succeeds; after that try autoplay.
+  const needsGesture =
+    requireUserGesture || (isAppleMobileBrowser() && !appleGestureUnlocked)
 
   let lastError = 'ElevenLabs TTS failed'
 
@@ -724,12 +864,23 @@ export async function speakWithElevenLabs(text, { onStart, onEnd, onError } = {}
 
       cachedWorkingVoiceId = voiceId
       const voiceName = cachedVoiceNames.get(voiceId) || voiceId
-      console.log(`[ElevenLabs] Playing: ${voiceName} (${voiceId})`)
-      await playTtsResponse(
-        response,
-        { onStart, onEnd, onError },
-        controller.signal,
+      const blob = await response.blob()
+      if (controller.signal.aborted) return
+      if (!blob?.size) {
+        lastError = 'ElevenLabs returned empty audio'
+        continue
+      }
+
+      console.log(
+        `[ElevenLabs] ${needsGesture ? 'Queued for tap' : 'Playing'}: ${voiceName} (${voiceId})`,
       )
+
+      if (needsGesture) {
+        await queueTtsBlobForUserGesture(blob, { onStart, onEnd, onError })
+        return
+      }
+
+      await playBlob(blob, { onStart, onEnd, onError })
       return
     } catch (error) {
       if (controller.signal.aborted) throw error

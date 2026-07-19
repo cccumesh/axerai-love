@@ -35,10 +35,12 @@ import {
 import {
   ensureMobileAudioUnlocked,
   isElevenLabsConfigured,
+  playQueuedTtsFromUserGesture,
   speakWithElevenLabs,
   unlockMobileSpeechAudio,
   stopElevenLabsSpeech,
 } from './elevenLabsTts.js'
+import { isAppleMobileBrowser } from './mobileBrowser.js'
 import { MyraModel, tickMyraMixer, MYRA_MODEL_PATH } from './myraModel.js'
 import { mountTargetAnchorVideo } from './myraTargetVideo.js'
 import { loadAxeraiExperienceAssets } from './axeraiAssets.js'
@@ -1336,6 +1338,10 @@ function App() {
 
     if (isElevenLabsConfigured()) {
       try {
+        // iPhone: first lines wait for Tap for sound (autoplay dies after Gemini delay).
+        if (isAppleMobileBrowser()) {
+          setJarvisUiReady(true)
+        }
         await speakWithElevenLabs(speechText, {
           onStart: startTalkingAnimation,
           onEnd: finish,
@@ -2601,7 +2607,9 @@ function mapGeminiCallType(reason) {
 
   useEffect(() => {
     const onAudioNeedsTap = (event) => {
-      setNeedsAudioTap(Boolean(event?.detail?.needsTap))
+      const needs = Boolean(event?.detail?.needsTap)
+      setNeedsAudioTap(needs)
+      if (needs) setJarvisUiReady(true)
     }
     window.addEventListener('axerai-audio-needs-tap', onAudioNeedsTap)
     return () => window.removeEventListener('axerai-audio-needs-tap', onAudioNeedsTap)
@@ -3226,8 +3234,14 @@ function mapGeminiCallType(reason) {
                 <button
                   type="button"
                   className="axerai-audio-tap"
-                  onPointerDown={() => {
-                    unlockMobileSpeechAudio({ force: true, speechPing: true })
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    // play() must start in this gesture — do not await anything first.
+                    const played = playQueuedTtsFromUserGesture()
+                    if (!played) {
+                      unlockMobileSpeechAudio({ force: true, speechPing: true })
+                    }
                     setNeedsAudioTap(false)
                   }}
                 >

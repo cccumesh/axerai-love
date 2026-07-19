@@ -585,26 +585,10 @@ async function reverseGeocodeArea(lat, lon) {
   }
 }
 
-async function getIpFallbackArea() {
-  try {
-    const res = await fetch('https://ipwho.is/')
-    if (!res.ok) return null
-    const data = await res.json()
-    if (data?.success && data.city) {
-      return `${data.city}, ${data.region || data.country || ''}`.replace(/,\s*$/, '')
-    }
-  } catch {
-    // ignore
-  }
-  return null
-}
-
 function getLocation() {
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
-      void getIpFallbackArea().then((ipArea) => {
-        resolve({ area: ipArea || 'Location unavailable', lat: null, lon: null })
-      })
+      resolve({ area: 'Location unavailable', lat: null, lon: null, source: 'none' })
       return
     }
     navigator.geolocation.getCurrentPosition(
@@ -616,11 +600,12 @@ function getLocation() {
           area: namedArea || `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
           lat,
           lon,
+          source: 'gps',
         })
       },
-      async () => {
-        const ipArea = await getIpFallbackArea()
-        resolve({ area: ipArea || 'Location permission denied', lat: null, lon: null })
+      () => {
+        // Do NOT invent a city from IP — wrong place > no place.
+        resolve({ area: 'Location permission denied', lat: null, lon: null, source: 'denied' })
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     )

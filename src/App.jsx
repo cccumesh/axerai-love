@@ -2285,11 +2285,10 @@ function mapGeminiCallType(reason) {
 
     try {
       registerProductScan()
-      let liveContext = liveContextRef.current
-      if (!liveContext?.localTime) {
-        liveContext = await fetchLiveContext()
-        liveContextRef.current = liveContext
-      }
+      // Always refresh at welcome — early prefetch often runs before GPS permission
+      // and used to cache a wrong IP city (e.g. Patna while user is in Jalgaon).
+      const liveContext = await fetchLiveContext()
+      liveContextRef.current = liveContext
 
       const welcomeMode = getLedgerWelcomeMode()
       const isReturnScan =

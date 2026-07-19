@@ -13,8 +13,21 @@ let cachedVoiceCandidates = null
 let connectionProbeDone = false
 const cachedVoiceNames = new Map()
 
+/**
+ * ElevenLabs is OFF unless explicitly enabled.
+ * Old bug: `USE_API_PROXY` alone returned true in production, so Netlify always
+ * tried ElevenLabs even when the project only uses browser TTS — broke iPhone voice.
+ *
+ * Enable later with Netlify env: VITE_ELEVENLABS_ENABLED=true (+ server ELEVENLABS_* keys).
+ */
 export function isElevenLabsConfigured() {
-  return USE_API_PROXY || Boolean(ELEVENLABS_API_KEY)
+  const explicitlyEnabled =
+    String(import.meta.env.VITE_ELEVENLABS_ENABLED ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+
+  if (USE_API_PROXY) return explicitlyEnabled
+  return explicitlyEnabled || Boolean(ELEVENLABS_API_KEY)
 }
 
 export function getElevenLabsConfigSummary() {

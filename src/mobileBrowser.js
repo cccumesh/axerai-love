@@ -5,3 +5,7 @@ export function isAppleMobileBrowser() {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   )
 }
+
+export function isAndroidBrowser() {
+  return /Android/i.test(navigator.userAgent || '')
+}

@@ -455,7 +455,7 @@ async function sealOpenThreadSession(thread, roleKey) {
       durationSeconds,
       roleKey,
       summary,
-      praise,
+    praise,
     })
     nextSummaries = previousSummaries ? `${previousSummaries}\n\n${summaryEntry}` : summaryEntry
   }
@@ -770,7 +770,7 @@ export async function startLedgerScan(verificationCode) {
     rebuildLedgerMemoryText()
 
     const scanNumber = (sealed.scan_count ?? existing.scan_count ?? 0) + 1
-    activeScanNumber = scanNumber
+  activeScanNumber = scanNumber
 
     const { error } = await supabase
       .from('ledger_threads')
@@ -1004,9 +1004,9 @@ export async function finishLedgerScan(options = {}) {
     }
 
     activeThreadId = null
-    activeScanNumber = 0
-    activeVerificationCode = ''
-    activeStartedAt = 0
+  activeScanNumber = 0
+  activeVerificationCode = ''
+  activeStartedAt = 0
   })()
 
   try {

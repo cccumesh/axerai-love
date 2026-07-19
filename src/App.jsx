@@ -40,7 +40,7 @@ import {
   unlockMobileSpeechAudio,
   stopElevenLabsSpeech,
 } from './elevenLabsTts.js'
-import { isAppleMobileBrowser } from './mobileBrowser.js'
+import { isAndroidBrowser, isAppleMobileBrowser } from './mobileBrowser.js'
 import { MyraModel, tickMyraMixer, MYRA_MODEL_PATH } from './myraModel.js'
 import { mountTargetAnchorVideo } from './myraTargetVideo.js'
 import { loadAxeraiExperienceAssets } from './axeraiAssets.js'
@@ -1781,7 +1781,31 @@ function mapGeminiCallType(reason) {
     rescheduleLiveMicSend()
   }, [rescheduleLiveMicSend])
 
+  /** Heart visual only — never hold getUserMedia on Android (steals mic from SpeechRecognition). */
+  const startProceduralLiveMicLevels = useCallback(() => {
+    if (liveMicRafRef.current) {
+      cancelAnimationFrame(liveMicRafRef.current)
+      liveMicRafRef.current = null
+    }
+    let phase = 0
+    const tick = () => {
+      if (composeModeRef.current !== 'liveMic') return
+      phase += 0.18
+      const base = 0.18 + (Math.sin(phase) * 0.5 + 0.5) * 0.35
+      setVoiceLevels(Array.from({ length: 12 }, (_, index) => Math.min(1, base + (index % 3) * 0.04)))
+      liveMicRafRef.current = requestAnimationFrame(tick)
+    }
+    tick()
+  }, [])
+
   const startLiveMicAnalyser = useCallback(async () => {
+    // Android Chrome: getUserMedia + webkitSpeechRecognition cannot share the mic.
+    // Keyboard/PTT works because it does not keep an analyser stream open.
+    if (isAndroidBrowser()) {
+      startProceduralLiveMicLevels()
+      return
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -1827,8 +1851,9 @@ function mapGeminiCallType(reason) {
       tick()
     } catch (error) {
       console.warn('[Jarvis] Live mic analyser failed:', error)
+      startProceduralLiveMicLevels()
     }
-  }, [])
+  }, [startProceduralLiveMicLevels])
 
   const startLiveMicMode = useCallback(async ({ softRestart = false } = {}) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -1840,6 +1865,8 @@ function mapGeminiCallType(reason) {
     const micReady = await ensureMicPermission()
     if (!micReady) return false
 
+    const android = isAndroidBrowser()
+
     if (!softRestart) {
       stopLiveMicMode()
       stopMicStream()
@@ -1849,7 +1876,13 @@ function mapGeminiCallType(reason) {
         // ignore
       }
       jarvisRecognitionRef.current = null
-      await startLiveMicAnalyser()
+      // Android: never keep getUserMedia open for the heart — frees mic for STT.
+      if (android) {
+        stopMicStream()
+        startProceduralLiveMicLevels()
+      } else {
+        await startLiveMicAnalyser()
+      }
     } else {
       clearLiveMicSilenceTimer()
       liveMicDisplayRef.current = ''
@@ -1866,18 +1899,24 @@ function mapGeminiCallType(reason) {
       }
       liveMicRecognitionRef.current = null
 
-      const streamAlive = liveMicStreamRef.current?.active
-      const analyserAlive = Boolean(liveMicAnalyserRef.current)
-      if (!streamAlive || !analyserAlive) {
-        await startLiveMicAnalyser()
-      } else if (liveMicAudioCtxRef.current?.state === 'suspended') {
-        await liveMicAudioCtxRef.current.resume().catch(() => {})
+      if (android) {
+        stopMicStream()
+        startProceduralLiveMicLevels()
+      } else {
+        const streamAlive = liveMicStreamRef.current?.active
+        const analyserAlive = Boolean(liveMicAnalyserRef.current)
+        if (!streamAlive || !analyserAlive) {
+          await startLiveMicAnalyser()
+        } else if (liveMicAudioCtxRef.current?.state === 'suspended') {
+          await liveMicAudioCtxRef.current.resume().catch(() => {})
+        }
       }
     }
 
     const recognition = new SpeechRecognition()
     liveMicRecognitionRef.current = recognition
-    recognition.continuous = true
+    // Android Chrome: continuous:true is flaky; one-shot + restart is more reliable.
+    recognition.continuous = !android
     recognition.interimResults = true
     recognition.lang = SPEECH_RECO_LANG
     recognition.maxAlternatives = 1
@@ -1916,14 +1955,13 @@ function mapGeminiCallType(reason) {
 
     recognition.onerror = (errorEvent) => {
       const err = errorEvent.error
-      // Android fires no-speech / aborted often — softRestart here = tung-tung beeps.
+      // no-speech / aborted: let onend restart quietly (do not softRestart — clears text + beeps).
       if (err === 'aborted' || err === 'no-speech') return
       if (err === 'not-allowed') {
         console.warn('[Jarvis] Live mic blocked:', err)
         return
       }
       console.warn('[Jarvis] Live mic error:', err)
-      // Only recreate recognition on harder failures (network / service).
       if (
         composeModeRef.current === 'liveMic' &&
         !jarvisBusyRef.current &&
@@ -1950,7 +1988,6 @@ function mapGeminiCallType(reason) {
       if (liveMicDisplayRef.current.trim()) {
         scheduleLiveMicSend()
       }
-      // Quiet restart — do not abort/recreate (that causes Android OEM mic chimes).
       window.setTimeout(() => {
         if (
           composeModeRef.current !== 'liveMic' ||
@@ -1959,15 +1996,34 @@ function mapGeminiCallType(reason) {
         ) {
           return
         }
+        // Same instance restart; if Android rejects it, recreate without wiping transcript.
         try {
           liveMicRecognitionRef.current?.start()
         } catch {
-          // ignore restart race
+          if (!android) return
+          try {
+            const next = new SpeechRecognition()
+            liveMicRecognitionRef.current = next
+            next.continuous = false
+            next.interimResults = true
+            next.lang = SPEECH_RECO_LANG
+            next.maxAlternatives = 1
+            next.onresult = recognition.onresult
+            next.onerror = recognition.onerror
+            next.onend = recognition.onend
+            next.start()
+          } catch (restartError) {
+            console.warn('[Jarvis] Android live mic restart failed:', restartError)
+          }
         }
-      }, 280)
+      }, android ? 180 : 280)
     }
 
     try {
+      // Ensure no leftover getUserMedia holds the mic on Android before STT starts.
+      if (android) {
+        stopMicStream()
+      }
       recognition.start()
       setIsListening(true)
       jarvisActiveRef.current = true
@@ -1981,6 +2037,7 @@ function mapGeminiCallType(reason) {
     ensureMicPermission,
     scheduleLiveMicSend,
     startLiveMicAnalyser,
+    startProceduralLiveMicLevels,
     stopLiveMicMode,
     stopMicStream,
   ])
@@ -3261,7 +3318,7 @@ function mapGeminiCallType(reason) {
                     ) : null}
                   </div>
                   <div
-                    className={`myra-live-mic-heart${isListening ? ' myra-live-mic-heart--active' : ''}`}
+                    className={`myra-live-mic-capsule${isListening ? ' myra-live-mic-capsule--active' : ''}`}
                     style={{
                       '--voice-energy': (
                         voiceLevels.reduce((sum, level) => sum + level, 0) / voiceLevels.length
@@ -3269,12 +3326,9 @@ function mapGeminiCallType(reason) {
                     }}
                     aria-hidden
                   >
-                    <span className="myra-live-mic-heart__core">
-                      <span className="myra-live-mic-heart__liquid" />
-                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--1" />
-                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--2" />
-                      <span className="myra-live-mic-heart__blob myra-live-mic-heart__blob--3" />
-                    </span>
+                    <span className="myra-live-mic-capsule__liquid" />
+                    <span className="myra-live-mic-capsule__blob myra-live-mic-capsule__blob--1" />
+                    <span className="myra-live-mic-capsule__blob myra-live-mic-capsule__blob--2" />
                   </div>
                 </div>
               )}

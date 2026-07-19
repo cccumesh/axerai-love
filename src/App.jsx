@@ -982,6 +982,7 @@ function App() {
   const [torchSupported, setTorchSupported] = useState(false)
   const [liveTranscript, setLiveTranscript] = useState('')
   const [voiceLevels, setVoiceLevels] = useState(() => Array(12).fill(0.15))
+  const [needsAudioTap, setNeedsAudioTap] = useState(false)
   const userImageRef = useRef(null)
   const composeInputRef = useRef(null)
   const liveTranscriptScrollRef = useRef(null)
@@ -1908,20 +1909,27 @@ function mapGeminiCallType(reason) {
     }
 
     recognition.onerror = (errorEvent) => {
-      if (errorEvent.error === 'aborted') return
-      console.warn('[Jarvis] Live mic error:', errorEvent.error)
+      const err = errorEvent.error
+      // Android fires no-speech / aborted often — softRestart here = tung-tung beeps.
+      if (err === 'aborted' || err === 'no-speech') return
+      if (err === 'not-allowed') {
+        console.warn('[Jarvis] Live mic blocked:', err)
+        return
+      }
+      console.warn('[Jarvis] Live mic error:', err)
+      // Only recreate recognition on harder failures (network / service).
       if (
         composeModeRef.current === 'liveMic' &&
         !jarvisBusyRef.current &&
         !aiSpeakingRef.current &&
-        errorEvent.error !== 'not-allowed'
+        (err === 'network' || err === 'service-not-allowed' || err === 'bad-grammar')
       ) {
         window.setTimeout(() => {
           if (composeModeRef.current !== 'liveMic' || jarvisBusyRef.current || aiSpeakingRef.current) {
             return
           }
           startLiveMicModeRef.current({ softRestart: true })
-        }, 220)
+        }, 600)
       }
     }
 
@@ -1936,6 +1944,7 @@ function mapGeminiCallType(reason) {
       if (liveMicDisplayRef.current.trim()) {
         scheduleLiveMicSend()
       }
+      // Quiet restart — do not abort/recreate (that causes Android OEM mic chimes).
       window.setTimeout(() => {
         if (
           composeModeRef.current !== 'liveMic' ||
@@ -1949,7 +1958,7 @@ function mapGeminiCallType(reason) {
         } catch {
           // ignore restart race
         }
-      }, 120)
+      }, 280)
     }
 
     try {
@@ -2591,6 +2600,14 @@ function mapGeminiCallType(reason) {
   }, [endExperience])
 
   useEffect(() => {
+    const onAudioNeedsTap = (event) => {
+      setNeedsAudioTap(Boolean(event?.detail?.needsTap))
+    }
+    window.addEventListener('axerai-audio-needs-tap', onAudioNeedsTap)
+    return () => window.removeEventListener('axerai-audio-needs-tap', onAudioNeedsTap)
+  }, [])
+
+  useEffect(() => {
     const saveLedgerOnPageHide = () => {
       if (!isLedgerScanActive()) return
       void finishLedgerScan({ fastExit: true })
@@ -3204,6 +3221,19 @@ function mapGeminiCallType(reason) {
                   </div>
                 </div>
               )}
+
+              {needsAudioTap ? (
+                <button
+                  type="button"
+                  className="axerai-audio-tap"
+                  onPointerDown={() => {
+                    unlockMobileSpeechAudio({ force: true, speechPing: true })
+                    setNeedsAudioTap(false)
+                  }}
+                >
+                  Tap for sound
+                </button>
+              ) : null}
 
               {isVerified && jarvisUiReady && composeMode === 'liveMic' && (
                 <div className="myra-live-mic-panel myra-compose-wrap--dock-clear absolute z-50 hud-inset-bottom">

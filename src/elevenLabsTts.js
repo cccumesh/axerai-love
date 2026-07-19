@@ -59,28 +59,39 @@ function getSharedAudioContext() {
   return sharedAudioCtx
 }
 
+function mountAudioEl(audio) {
+  if (typeof document === 'undefined' || !document.body || audio.isConnected) return
+  audio.setAttribute('aria-hidden', 'true')
+  audio.style.cssText =
+    'position:fixed;width:0;height:0;opacity:0;pointer-events:none;left:-9999px'
+  document.body.appendChild(audio)
+}
+
 function makeInlineAudio() {
   const audio = new Audio()
   audio.setAttribute('playsinline', '')
   audio.setAttribute('webkit-playsinline', '')
   audio.playsInline = true
   audio.preload = 'auto'
+  mountAudioEl(audio)
   return audio
 }
 
 function getUnlockAudioElement() {
   if (!unlockAudioEl) unlockAudioEl = makeInlineAudio()
+  else mountAudioEl(unlockAudioEl)
   return unlockAudioEl
 }
 
 function getTtsAudioElement() {
   if (!ttsAudioEl) ttsAudioEl = makeInlineAudio()
+  else mountAudioEl(ttsAudioEl)
   return ttsAudioEl
 }
 
-/** Keep Web Audio session alive on iPhone after first gesture — no extra "tap for sound". */
+/** Keep Web Audio session alive on iPhone only — Android can hear tiny oscillator clicks. */
 function startSilentKeepAlive(ctx) {
-  if (!ctx || keepAliveOsc) return
+  if (!ctx || keepAliveOsc || !isAppleMobileBrowser()) return
   try {
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
@@ -93,6 +104,16 @@ function startSilentKeepAlive(ctx) {
     keepAliveGain = gain
   } catch (error) {
     console.warn('[Audio] keep-alive failed:', error?.name || error)
+  }
+}
+
+function notifyAudioNeedsTap(needsTap) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent('axerai-audio-needs-tap', { detail: { needsTap: Boolean(needsTap) } }),
+    )
+  } catch {
+    // ignore
   }
 }
 
@@ -189,7 +210,7 @@ async function flushPendingHtmlPlay() {
   }
 }
 
-/** Refresh iOS/Safari audio + speechSynthesis unlock (no extra tap UI). */
+/** Refresh iOS/Safari audio unlock. speechPing is Apple-only (Android makes tung-tung beeps). */
 export function unlockMobileSpeechAudio({ force = false, speechPing = false } = {}) {
   // Kick AudioContext resume synchronously inside the gesture when possible.
   const ctx = getSharedAudioContext()
@@ -197,7 +218,9 @@ export function unlockMobileSpeechAudio({ force = false, speechPing = false } = 
 
   void ensureMobileAudioUnlocked({ force }).then(async (ok) => {
     await flushPendingHtmlPlay()
-    if (!ok || !speechPing) return
+    notifyAudioNeedsTap(Boolean(pendingHtmlPlay))
+    // Never speechSynthesis-ping on Android — OEM TTS clicks sound like "tung tung".
+    if (!ok || !speechPing || !isAppleMobileBrowser()) return
     const synth = window.speechSynthesis
     if (!synth) return
     try {
@@ -506,6 +529,7 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
 
   try {
     await audio.play()
+    notifyAudioNeedsTap(false)
     onStart?.()
   } catch (error) {
     const name = error instanceof Error ? error.name : ''
@@ -515,6 +539,7 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
         blob,
         callbacks: { onStart, onEnd, onError },
       }
+      notifyAudioNeedsTap(true)
       console.warn('[Audio] iOS blocked TTS — waiting for next tap to play')
       return
     }

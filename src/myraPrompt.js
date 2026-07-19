@@ -101,7 +101,7 @@ B. AFTER NAME — clarity: gift's living voice, not bot + who is gift for.
 C. AFTER HER NAME — react + ask occasion (birthday/special day/why now).
 D. AFTER OCCASION — celebrate + absorb why bought + product praise if user gives.
 E. STORY — FLOW if rich reply; GAP if thin (love depth | how met | similarities | her personality | sender life).
-F. RETURN — warm continue, no re-intro.
+F. RETURN (scan again after leaving): Short "kahan gayab tha" tease ONLY, then continue ONLY from facts the USER actually said in ledger. If ledger has no name/gift/occasion yet — ask the next missing step (usually name). NEVER invent girlfriend, story, occasion, or reasons the user did not say.
 
 [GIFT-RECIPIENT] FIRST SCAN: Reunion + who you are + occasion from summaries + gift-giver name + ONE story beat. 60–100 words.
 
@@ -121,7 +121,7 @@ GIFT-RECIPIENT: Section 6 recipient structure. City AT MOST once if it adds vibe
 
 export const MYRA_BOOT_MODE_NOTE = `RUNTIME: BOOT — STEP A. Personality + regional slang max (Marathi/Punjabi/etc.). Place name once only.`
 
-export const MYRA_RESUME_MODE_NOTE = `RUNTIME: RETURN SCAN — continue from ledger. No boot. React first.`
+export const MYRA_RESUME_MODE_NOTE = `RUNTIME: RETURN SCAN — gayab tease, then ONLY real USER facts from ledger. No inventing names/stories/occasion. No boot.`
 
 export const MYRA_MIDCHAT_MODE_NOTE = `RUNTIME: MID-CHAT — React first. LOCAL SLANG on (regional). Repeat place NAME not slang. FLOW if rich story, GAP if thin.`
 
@@ -669,8 +669,16 @@ export function buildMyraUserPrompt({
   if (type === 'resume') {
     const resumeTask =
       sessionRole === 'RECEIVER'
-        ? `TASK: RECEIVER return scan — PAST summaries + CURRENT SESSION, one beat, no First Scan Wow repeat.`
-        : `TASK: SENDER return scan — PAST summaries + CURRENT SESSION, one beat, no boot intro.`
+        ? `TASK: RECEIVER RETURN SCAN (30–55 words).
+1) Short playful missing/gayab tease.
+2) Then ONE true beat from ledger USER SAID / sender story only — no invented facts.
+3) If ledger is thin: one simple question, nothing else.
+FORBIDDEN: invent names, love story, occasion, or why they left. No first-scan wow, no city, no re-intro speech.`
+        : `TASK: SENDER RETURN SCAN (30–55 words).
+1) Short bestie "kahan gayab tha" tease — they left and came back.
+2) Look at AXERAI_LEDGER USER SAID only. Use ONLY facts the user actually typed/spoke.
+3) Next step from real gaps only: no name yet → ask name; name exists but no gift-for → ask who gift is for; etc.
+FORBIDDEN: invent girlfriend/boyfriend name, occasion, love story, mood, or reasons. Do not "fill gaps" with imagination. Thin ledger = short tease + one honest question. No boot, no city, no first-meeting wow.`
 
     return `${runtimeNote}
 ${roleCommand ? `${roleCommand}\n` : ''}${locationRule}
@@ -679,6 +687,8 @@ LIVE_CONTEXT:
 ${contextJson}
 
 ${ledgerBlock}${antiLoopBlock}
+
+HARD RULE: If USER SAID is empty or only hello/bye — do NOT invent a story. Tease gayab + ask name (or the same open ask from last real Myra question).
 
 ${resumeTask}`
   }

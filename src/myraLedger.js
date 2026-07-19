@@ -126,11 +126,11 @@ function buildBackendScanSignal(mode) {
     case 'SENDER_FIRST':
       return 'Axerai backend: gift-giver first scan. STEP A boot. Then memories for recipient — love, story, her personality, sender life. Rule 22: rich story = stay in flow. Gap probe only when thin.'
     case 'SENDER_RETURN':
-      return 'Axerai backend: SENDER scan again. Read sender PAST summaries + sender CURRENT SESSION in AXERAI LEDGER. Continue naturally. No boot intro.'
+      return 'Axerai backend: SENDER return scan. Gayab tease first. Continue ONLY from real USER SAID facts in sender PAST summaries. Never invent name/story/occasion. No boot intro.'
     case 'RECEIVER_FIRST':
       return 'Axerai backend: RECEIVER first scan. Read sender PAST summaries (gift story) + receiver CURRENT SESSION in AXERAI LEDGER.'
     case 'RECEIVER_RETURN':
-      return 'Axerai backend: RECEIVER scan again. Read sender PAST summaries + receiver PAST summaries + receiver CURRENT SESSION. Continue. No repeat boot intro.'
+      return 'Axerai backend: RECEIVER return scan. Gayab tease first. Only real ledger facts — never invent. No boot intro.'
     default:
       return ''
   }
@@ -379,6 +379,118 @@ function hasDialogueLines(dialogue) {
   return /^(myra|sender|receiver):/im.test(String(dialogue ?? ''))
 }
 
+function hasSummaryForScan(sessionSummaries, scanNumber) {
+  return new RegExp(`--- session ${Number(scanNumber)} summary\\b`, 'i').test(
+    String(sessionSummaries ?? ''),
+  )
+}
+
+function hasEndFooterForScan(conversation, scanNumber) {
+  return new RegExp(`--- session ${Number(scanNumber)} end ---`, 'i').test(
+    String(conversation ?? ''),
+  )
+}
+
+/** Last session that started but never got an end footer (tab kill / pagehide race). */
+function findOpenSessionNumber(conversation) {
+  const starts = [...String(conversation ?? '').matchAll(/--- session (\d+) start ---/gi)]
+  if (!starts.length) return null
+  const scanNumber = Number(starts[starts.length - 1][1])
+  if (!Number.isFinite(scanNumber) || scanNumber < 1) return null
+  if (hasEndFooterForScan(conversation, scanNumber)) return null
+  return scanNumber
+}
+
+/**
+ * If previous scan never finished (common when user closes tab and rescans),
+ * write a LOCAL summary + end footer BEFORE the next session starts.
+ * Gemini async summary on pagehide is too slow / often lost.
+ */
+async function sealOpenThreadSession(thread, roleKey) {
+  if (!supabase || !thread?.id) return thread
+
+  const conversation = String(thread.conversation ?? '').trim()
+  const previousSummaries = String(thread.session_summaries ?? '').trim()
+  const openScan = findOpenSessionNumber(conversation)
+  if (openScan == null) return thread
+
+  const sessionDialogue = sanitizeSessionDialogue(extractCurrentSessionConversation(conversation))
+  const endedAt = Date.now()
+  const startedAt = endedAt
+  const durationSeconds = 1
+
+  let summary = ''
+  let praise = { detected: false, quote: '' }
+  let source = 'already'
+
+  if (!hasSummaryForScan(previousSummaries, openScan)) {
+    const local = buildSummaryFromConversation('', roleKey, sessionDialogue)
+    summary = local.summary
+    praise = local.praise
+    source = 'seal-local'
+  }
+
+  const footer = hasEndFooterForScan(conversation, openScan)
+    ? ''
+    : buildSessionConversationFooter({
+        scanNumber: openScan,
+        startedAt,
+        endedAt,
+        durationSeconds,
+        praise,
+      })
+
+  const conversationWithFooter = footer
+    ? conversation
+      ? `${conversation}\n${footer}`
+      : footer
+    : conversation
+
+  let nextSummaries = previousSummaries
+  if (summary) {
+    const summaryEntry = buildSessionSummaryEntry({
+      scanNumber: openScan,
+      startedAt,
+      endedAt,
+      durationSeconds,
+      roleKey,
+      summary,
+      praise,
+    })
+    nextSummaries = previousSummaries ? `${previousSummaries}\n\n${summaryEntry}` : summaryEntry
+  }
+
+  if (conversationWithFooter === conversation && nextSummaries === previousSummaries) {
+    return thread
+  }
+
+  const { error } = await supabase
+    .from('ledger_threads')
+    .update({
+      conversation: conversationWithFooter,
+      session_summaries: nextSummaries,
+    })
+    .eq('id', thread.id)
+
+  if (error) {
+    console.warn('[Ledger] seal open session failed:', error.message)
+    return thread
+  }
+
+  logLedger('sealed open session before next scan', {
+    scanNumber: openScan,
+    role: roleKey,
+    source,
+    hadDialogue: hasDialogueLines(sessionDialogue),
+  })
+
+  return {
+    ...thread,
+    conversation: conversationWithFooter,
+    session_summaries: nextSummaries,
+  }
+}
+
 function parseSessionSummaryEntries(sessionSummaries) {
   const text = String(sessionSummaries ?? '').trim()
   if (!text) return []
@@ -562,17 +674,23 @@ export async function prefetchLedgerMemory(verificationCode) {
     logLedger('SENDER device', { device: deviceId.slice(0, 8) + '…' })
   }
 
-  cachedSenderThread = senderThread
-  cachedReceiverThread = receiverThread
-  ledgerWelcomeMode = resolveWelcomeMode(sessionRole, senderThread, receiverThread)
+  // Seal any open previous scan FIRST — otherwise return welcome has no PAST summary.
+  const sealedSender = await sealOpenThreadSession(senderThread, 'sender')
+  const sealedReceiver = await sealOpenThreadSession(receiverThread, 'receiver')
+
+  cachedSenderThread = sealedSender
+  cachedReceiverThread = sealedReceiver
+  ledgerWelcomeMode = resolveWelcomeMode(sessionRole, sealedSender, sealedReceiver)
   rebuildLedgerMemoryText()
 
   logLedger('prefetch OK', {
     code: verificationCode,
     role: sessionRole,
     welcomeMode: ledgerWelcomeMode,
-    senderLines: parseConversationLines(senderThread?.conversation).length,
-    receiverLines: parseConversationLines(receiverThread?.conversation).length,
+    senderLines: parseConversationLines(sealedSender?.conversation).length,
+    receiverLines: parseConversationLines(sealedReceiver?.conversation).length,
+    senderPastSummaries: parseSessionSummaryEntries(sealedSender?.session_summaries).length,
+    receiverPastSummaries: parseSessionSummaryEntries(sealedReceiver?.session_summaries).length,
   })
 
   return { allowed: true, role: sessionRole }
@@ -606,6 +724,15 @@ async function appendSessionMarker(markerLine) {
 export async function startLedgerScan(verificationCode) {
   if (!supabase || !verificationCode) return null
 
+  // Wait for in-flight pagehide finish so we don't open session 2 on half-saved session 1.
+  if (ledgerFinishPromise) {
+    try {
+      await ledgerFinishPromise
+    } catch {
+      // ignore — seal below still covers orphan sessions
+    }
+  }
+
   const deviceId = getDeviceId()
   const roleKey = roleKeyFromSession()
   activeStartedAt = Date.now()
@@ -613,7 +740,7 @@ export async function startLedgerScan(verificationCode) {
 
   const { data: existing, error: readError } = await supabase
     .from('ledger_threads')
-    .select('id, scan_count, device_id')
+    .select('id, scan_count, device_id, conversation, session_summaries')
     .eq('verification_code', verificationCode)
     .eq('role', roleKey)
     .maybeSingle()
@@ -636,7 +763,13 @@ export async function startLedgerScan(verificationCode) {
       return { rejected: true, reason: 'PAIR_FULL' }
     }
 
-    const scanNumber = (existing.scan_count ?? 0) + 1
+    // Seal orphan session before writing the next start marker.
+    const sealed = await sealOpenThreadSession(existing, roleKey)
+    if (roleKey === 'sender') cachedSenderThread = { ...(cachedSenderThread ?? {}), ...sealed }
+    else cachedReceiverThread = { ...(cachedReceiverThread ?? {}), ...sealed }
+    rebuildLedgerMemoryText()
+
+    const scanNumber = (sealed.scan_count ?? existing.scan_count ?? 0) + 1
     activeScanNumber = scanNumber
 
     const { error } = await supabase
@@ -655,6 +788,7 @@ export async function startLedgerScan(verificationCode) {
 
     activeThreadId = existing.id
     await appendSessionMarker(`--- session ${scanNumber} start ---`)
+    rebuildLedgerMemoryText()
     logLedger(`Scan ${scanNumber} resumed`, { code: verificationCode, threadId: activeThreadId, role: roleKey })
     return { scanId: activeThreadId, scanNumber }
   }
@@ -765,16 +899,42 @@ export async function finishLedgerScan(options = {}) {
 
     const conversationBeforeFooter = String(row?.conversation ?? '').trim()
     const previousSummaries = String(row?.session_summaries ?? '').trim()
+
+    // Already sealed by next-scan prefetch (or prior finish) — don't duplicate.
+    if (
+      hasEndFooterForScan(conversationBeforeFooter, scanNumber) &&
+      hasSummaryForScan(previousSummaries, scanNumber)
+    ) {
+      logLedger('finish skipped — session already sealed', { scanNumber, role: roleKey, fastExit })
+      activeThreadId = null
+      activeScanNumber = 0
+      activeVerificationCode = ''
+      activeStartedAt = 0
+      return
+    }
+
     const sessionDialogue = sanitizeSessionDialogue(
       extractCurrentSessionConversation(conversationBeforeFooter),
     )
-    const { summary, praise, source } = await buildSessionSummaryAndPraise({
-      sessionDialogue,
-      roleKey,
-      scanNumber,
-    })
 
-    if (hasDialogueLines(sessionDialogue)) {
+    // pagehide/tab close: local summary only (Gemini is too slow and often never saves).
+    let summary
+    let praise
+    let source
+    if (fastExit || hasSummaryForScan(previousSummaries, scanNumber)) {
+      const local = buildSummaryFromConversation('', roleKey, sessionDialogue)
+      summary = hasSummaryForScan(previousSummaries, scanNumber) ? '' : local.summary
+      praise = local.praise
+      source = hasSummaryForScan(previousSummaries, scanNumber) ? 'already' : 'fast-local'
+    } else {
+      ;({ summary, praise, source } = await buildSessionSummaryAndPraise({
+        sessionDialogue,
+        roleKey,
+        scanNumber,
+      }))
+    }
+
+    if (hasDialogueLines(sessionDialogue) && summary) {
       logLedger('session summary saved', {
         scanNumber,
         role: roleKey,
@@ -785,28 +945,35 @@ export async function finishLedgerScan(options = {}) {
       })
     }
 
-    const footer = buildSessionConversationFooter({
-      scanNumber,
-      startedAt: activeStartedAt,
-      endedAt,
-      durationSeconds,
-      praise,
-    })
+    const footer = hasEndFooterForScan(conversationBeforeFooter, scanNumber)
+      ? ''
+      : buildSessionConversationFooter({
+          scanNumber,
+          startedAt: activeStartedAt || endedAt,
+          endedAt,
+          durationSeconds,
+          praise,
+        })
 
-    const conversationWithFooter = conversationBeforeFooter
-      ? `${conversationBeforeFooter}\n${footer}`
-      : footer
+    const conversationWithFooter = footer
+      ? conversationBeforeFooter
+        ? `${conversationBeforeFooter}\n${footer}`
+        : footer
+      : conversationBeforeFooter
 
-    const summaryEntry = buildSessionSummaryEntry({
-      scanNumber,
-      startedAt: activeStartedAt,
-      endedAt,
-      durationSeconds,
-      roleKey,
-      summary,
-      praise,
-    })
-    const nextSummaries = previousSummaries ? `${previousSummaries}\n\n${summaryEntry}` : summaryEntry
+    let nextSummaries = previousSummaries
+    if (summary && !hasSummaryForScan(previousSummaries, scanNumber)) {
+      const summaryEntry = buildSessionSummaryEntry({
+        scanNumber,
+        startedAt: activeStartedAt || endedAt,
+        endedAt,
+        durationSeconds,
+        roleKey,
+        summary,
+        praise,
+      })
+      nextSummaries = previousSummaries ? `${previousSummaries}\n\n${summaryEntry}` : summaryEntry
+    }
 
     const { error } = await supabase
       .from('ledger_threads')

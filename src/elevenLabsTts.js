@@ -34,9 +34,11 @@ let sharedAudioCtx = null
 let keepAliveOsc = null
 let keepAliveGain = null
 let unlockInFlight = null
-/** Web Audio TTS source (iPhone path). */
+/** Web Audio TTS source (fallback path). */
 let currentBufferSource = null
 let currentObjectUrl = null
+/** If iOS blocks play(), retry once on the next user gesture. */
+let pendingHtmlPlay = null
 
 const SILENT_WAV =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
@@ -119,19 +121,33 @@ export async function ensureMobileAudioUnlocked({ force = false } = {}) {
         await withTimeout(ctx.resume(), 800)
       }
 
-      // Unmuted near-silent play — muted-only unlock often fails for later TTS on iOS.
-      const audio = getUnlockAudioElement()
-      audio.muted = false
-      audio.volume = 0.01
-      audio.src = SILENT_WAV
-      const playResult = await withTimeout(audio.play(), 1200)
-      if (playResult !== 'timeout') {
-        audio.pause()
-        try {
-          audio.currentTime = 0
-        } catch {
-          // ignore
+      // Keep a near-silent looping <audio> alive — pausing often re-locks iOS.
+      const unlockEl = getUnlockAudioElement()
+      unlockEl.muted = false
+      unlockEl.volume = 0.01
+      unlockEl.loop = true
+      if (unlockEl.paused) {
+        unlockEl.src = SILENT_WAV
+        await withTimeout(unlockEl.play(), 1200)
+      }
+
+      // Prime the same element that will play ElevenLabs later.
+      const ttsEl = getTtsAudioElement()
+      if (!currentAudio) {
+        ttsEl.muted = false
+        ttsEl.volume = 0.01
+        ttsEl.loop = false
+        ttsEl.src = SILENT_WAV
+        const ttsPlay = await withTimeout(ttsEl.play(), 1200)
+        if (ttsPlay !== 'timeout') {
+          ttsEl.pause()
+          try {
+            ttsEl.currentTime = 0
+          } catch {
+            // ignore
+          }
         }
+        ttsEl.volume = 1
       }
 
       if (ctx) startSilentKeepAlive(ctx)
@@ -160,13 +176,27 @@ export function primeMobileAudio({ force = false } = {}) {
   void ensureMobileAudioUnlocked({ force })
 }
 
+async function flushPendingHtmlPlay() {
+  if (!pendingHtmlPlay) return
+  const job = pendingHtmlPlay
+  pendingHtmlPlay = null
+  try {
+    await playBlobViaHtmlAudio(job.blob, job.callbacks)
+  } catch (error) {
+    console.warn('[Audio] Pending TTS retry failed:', error)
+    job.callbacks?.onError?.(error instanceof Error ? error : new Error(String(error)))
+    job.callbacks?.onEnd?.()
+  }
+}
+
 /** Refresh iOS/Safari audio + speechSynthesis unlock (no extra tap UI). */
 export function unlockMobileSpeechAudio({ force = false, speechPing = false } = {}) {
   // Kick AudioContext resume synchronously inside the gesture when possible.
   const ctx = getSharedAudioContext()
   void ctx?.resume?.()
 
-  void ensureMobileAudioUnlocked({ force }).then((ok) => {
+  void ensureMobileAudioUnlocked({ force }).then(async (ok) => {
+    await flushPendingHtmlPlay()
     if (!ok || !speechPing) return
     const synth = window.speechSynthesis
     if (!synth) return
@@ -201,6 +231,7 @@ function stopBufferSource() {
 
 export function stopElevenLabsSpeech() {
   disconnectTtsAudio()
+  pendingHtmlPlay = null
   if (currentAbort) {
     currentAbort.abort()
     currentAbort = null
@@ -335,7 +366,9 @@ async function loadVoiceNames() {
 }
 
 async function fetchVoiceCandidates() {
-  if (USE_API_PROXY) return [ELEVENLABS_VOICE_ID].filter(Boolean)
+  // Production proxy uses server ELEVENLABS_VOICE_ID — client VITE_ id is often empty.
+  // Must still return a placeholder or speakWithElevenLabs aborts before any fetch.
+  if (USE_API_PROXY) return [ELEVENLABS_VOICE_ID || 'server']
 
   if (cachedVoiceCandidates) return cachedVoiceCandidates
 
@@ -353,7 +386,32 @@ async function fetchVoiceCandidates() {
   return cachedVoiceCandidates
 }
 
-/** iPhone: play TTS through unlocked AudioContext (survives Gemini delay). */
+async function waitForAudioReady(audio, timeoutMs = 4000) {
+  if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return
+  await Promise.race([
+    new Promise((resolve, reject) => {
+      const onReady = () => {
+        cleanup()
+        resolve()
+      }
+      const onError = () => {
+        cleanup()
+        reject(new Error('Audio load failed'))
+      }
+      const cleanup = () => {
+        audio.removeEventListener('canplaythrough', onReady)
+        audio.removeEventListener('loadeddata', onReady)
+        audio.removeEventListener('error', onError)
+      }
+      audio.addEventListener('canplaythrough', onReady, { once: true })
+      audio.addEventListener('loadeddata', onReady, { once: true })
+      audio.addEventListener('error', onError, { once: true })
+    }),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
+}
+
+/** Fallback only — Web Audio is muted by iPhone hardware Silent switch. */
 async function playBlobViaWebAudio(blob, { onStart, onEnd, onError }) {
   const ctx = getSharedAudioContext()
   if (!ctx) throw new Error('Web Audio unavailable')
@@ -364,7 +422,6 @@ async function playBlobViaWebAudio(blob, { onStart, onEnd, onError }) {
   startSilentKeepAlive(ctx)
 
   const arrayBuffer = await blob.arrayBuffer()
-  // copy — decodeAudioData may detach the buffer on some WebKits
   const copy = arrayBuffer.slice(0)
   const audioBuffer = await ctx.decodeAudioData(copy)
 
@@ -407,9 +464,15 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
   const audio = getTtsAudioElement()
   audio.muted = false
   audio.volume = 1
+  audio.loop = false
   audio.src = objectUrl
   audio._objectUrl = objectUrl
   currentAudio = audio
+  try {
+    audio.load()
+  } catch {
+    // ignore
+  }
 
   const cleanup = () => {
     if (currentObjectUrl === objectUrl) {
@@ -433,13 +496,31 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
     onError?.(new Error('ElevenLabs audio playback failed'))
   }
 
-  const ctx = getSharedAudioContext()
-  if (ctx?.state === 'suspended') {
-    await ctx.resume().catch(() => {})
+  await waitForAudioReady(audio)
+  // Do not route iPhone TTS through Web Audio graph — Silent switch + session steal.
+  if (!isAppleMobileBrowser()) {
+    connectTtsAudio(audio)
+  } else {
+    startSpeechLipSync()
   }
-  connectTtsAudio(audio)
-  await audio.play()
-  onStart?.()
+
+  try {
+    await audio.play()
+    onStart?.()
+  } catch (error) {
+    const name = error instanceof Error ? error.name : ''
+    if (isAppleMobileBrowser() && (name === 'NotAllowedError' || name === 'AbortError')) {
+      // Resolve after the user taps again (unlockMobileSpeechAudio flushes this).
+      pendingHtmlPlay = {
+        blob,
+        callbacks: { onStart, onEnd, onError },
+      }
+      console.warn('[Audio] iOS blocked TTS — waiting for next tap to play')
+      return
+    }
+    cleanup()
+    throw error
+  }
 }
 
 async function playBlob(blob, { onStart, onEnd, onError }) {
@@ -447,24 +528,22 @@ async function playBlob(blob, { onStart, onEnd, onError }) {
     throw new Error('ElevenLabs returned empty audio')
   }
 
-  // Resume context only — never rewrite TTS src with silent unlock WAV.
+  // Keep session warm — never rewrite TTS src with silent unlock WAV.
   void ensureMobileAudioUnlocked({ force: false })
 
   try {
-    if (isAppleMobileBrowser()) {
-      try {
-        await playBlobViaWebAudio(blob, { onStart, onEnd, onError })
-        return
-      } catch (webAudioError) {
-        console.warn('[Audio] Web Audio TTS failed, trying HTML audio:', webAudioError)
-      }
-    }
+    // iPhone: HTMLAudioElement first (works with Silent switch better than Web Audio).
     await playBlobViaHtmlAudio(blob, { onStart, onEnd, onError })
-  } catch (error) {
-    const name = error instanceof Error ? error.name : 'PlaybackError'
-    throw new Error(
-      `iPhone audio block (${name}) — Silent mode off karo, volume up, phir camera allow / screen tap karke dubara try karo`,
-    )
+  } catch (htmlError) {
+    console.warn('[Audio] HTML TTS failed, trying Web Audio:', htmlError)
+    try {
+      await playBlobViaWebAudio(blob, { onStart, onEnd, onError })
+    } catch (error) {
+      const name = error instanceof Error ? error.name : 'PlaybackError'
+      throw new Error(
+        `iPhone audio block (${name}) — volume up karo, screen tap karke dubara try karo`,
+      )
+    }
   }
 }
 

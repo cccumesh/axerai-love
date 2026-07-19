@@ -57,6 +57,8 @@ let pendingHtmlPlay = null
  * play() MUST start inside the pointerdown handler (same user gesture).
  */
 let deferredTtsJob = null
+/** iPhone browser speechSynthesis — also needs the same tap gesture. */
+let deferredBrowserTts = null
 /** After one successful gesture play, later lines may autoplay. */
 let appleGestureUnlocked = false
 
@@ -217,6 +219,28 @@ export function primeMobileAudio({ force = false } = {}) {
   void ensureMobileAudioUnlocked({ force })
 }
 
+/**
+ * Choocha Safari loophole: empty utterance spoken *synchronously* inside a user
+ * gesture. Keeps speechSynthesis unlocked so later browser-TTS can speak after
+ * Gemini (even when ElevenLabs credits are gone).
+ */
+export function primeSafariSpeechSynthesis() {
+  if (!isAppleMobileBrowser()) return
+  const synth = window.speechSynthesis
+  if (!synth) return
+  try {
+    synth.resume?.()
+    // Empty string — same as axerai captureFrame. Do NOT cancel() first.
+    synth.speak(new SpeechSynthesisUtterance(''))
+  } catch {
+    // ignore
+  }
+}
+
+export function isAppleSpeechGestureUnlocked() {
+  return appleGestureUnlocked
+}
+
 function clearDeferredTtsJob(reason) {
   if (!deferredTtsJob) return
   const job = deferredTtsJob
@@ -228,13 +252,72 @@ function clearDeferredTtsJob(reason) {
   }
 }
 
+function playQueuedBrowserTtsFromGesture() {
+  const job = deferredBrowserTts
+  if (!job?.text) return false
+
+  clearSilentGestureArm()
+  deferredBrowserTts = null
+  notifyAudioNeedsTap(false)
+
+  const synth = window.speechSynthesis
+  if (!synth) {
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+    return false
+  }
+
+  try {
+    // Do not cancel() here — iOS can drop the next speak() after cancel in the same tick.
+    synth.resume?.()
+  } catch {
+    // ignore
+  }
+
+  const utterance = new SpeechSynthesisUtterance(job.text)
+  // Prefer default Safari voice when none stored — some en-IN voices fail silently.
+  if (job.voice) {
+    utterance.voice = job.voice
+    utterance.lang = job.voice.lang || 'hi-IN'
+  } else {
+    utterance.lang = job.lang || 'hi-IN'
+  }
+  utterance.rate = job.rate ?? 1.06
+  utterance.pitch = job.pitch ?? 1
+  utterance.onstart = () => {
+    appleGestureUnlocked = true
+    mobileAudioPrimed = true
+    startSpeechLipSync()
+    job.callbacks?.onStart?.()
+  }
+  utterance.onend = () => {
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+  }
+  utterance.onerror = (event) => {
+    console.warn('[Audio] iPhone browser TTS error:', event?.error || event)
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+  }
+
+  // Must call speak() inside the user gesture — Safari drops delayed speak().
+  synth.speak(utterance)
+  console.info('[Audio] iPhone browser TTS started from tap')
+  return true
+}
+
 /**
- * Call from Tap for sound pointerdown ONLY — starts play() in the same gesture.
+ * Call from Tap for sound pointerdown ONLY — starts play/speak in the same gesture.
  * This is the reliable iPhone path (autoplay after Gemini delay always fails).
  */
 export function playQueuedTtsFromUserGesture() {
   const ctx = getSharedAudioContext()
   void ctx?.resume?.()
+
+  // Browser TTS queue (default when ElevenLabs is off).
+  if (deferredBrowserTts?.text) {
+    return playQueuedBrowserTtsFromGesture()
+  }
 
   const job = deferredTtsJob || pendingHtmlPlay
   if (!job?.blob) {
@@ -309,7 +392,219 @@ export function playQueuedTtsFromUserGesture() {
 }
 
 export function hasQueuedTtsForGesture() {
-  return Boolean(deferredTtsJob?.blob || pendingHtmlPlay?.blob)
+  return Boolean(deferredTtsJob?.blob || pendingHtmlPlay?.blob || deferredBrowserTts?.text)
+}
+
+let silentGestureArm = null
+
+function clearSilentGestureArm() {
+  if (!silentGestureArm) return
+  const arm = silentGestureArm
+  silentGestureArm = null
+  if (arm.hintTimer) {
+    clearTimeout(arm.hintTimer)
+    arm.hintTimer = null
+  }
+  if (arm.listener) {
+    arm.events.forEach((type) => {
+      window.removeEventListener(type, arm.listener, true)
+    })
+  }
+}
+
+/**
+ * Queue Safari TTS for the next real touch/click — no button required.
+ * Only shows "Tap for sound" if nothing arrives for a few seconds.
+ */
+function armSilentGestureBrowserTts(job) {
+  clearSilentGestureArm()
+
+  deferredBrowserTts = job
+  // Prefer invisible unlock via natural touch (holding phone / adjusting aim).
+  notifyAudioNeedsTap(false)
+
+  const events = ['pointerdown', 'touchstart', 'click']
+  const onGesture = () => {
+    if (!deferredBrowserTts || deferredBrowserTts !== job) return
+    clearSilentGestureArm()
+    playQueuedBrowserTtsFromGesture()
+  }
+
+  const hintTimer = window.setTimeout(() => {
+    if (deferredBrowserTts === job) {
+      notifyAudioNeedsTap(true)
+      console.info('[Audio] iPhone — still waiting; showing Tap for sound')
+    }
+  }, 2800)
+
+  silentGestureArm = { listener: onGesture, events, hintTimer }
+  events.forEach((type) => {
+    window.addEventListener(type, onGesture, { capture: true, passive: true })
+  })
+  console.info('[Audio] iPhone — waiting for natural touch to start Safari voice')
+}
+
+/** Queue Safari speechSynthesis until user taps Tap for sound. */
+export function queueBrowserTtsForUserGesture(
+  text,
+  { onStart, onEnd, onError, voice = null, lang = 'hi-IN', rate = 1.06, pitch = 1, showTapHint = true } = {},
+) {
+  const trimmed = String(text ?? '').trim()
+  return new Promise((resolve) => {
+    if (!trimmed) {
+      onEnd?.()
+      resolve()
+      return
+    }
+    if (deferredBrowserTts) {
+      deferredBrowserTts.callbacks?.onEnd?.()
+      deferredBrowserTts.resolvePlay?.()
+    }
+    clearSilentGestureArm()
+    const job = {
+      text: trimmed,
+      voice,
+      lang,
+      rate,
+      pitch,
+      callbacks: { onStart, onEnd, onError },
+      resolvePlay: resolve,
+    }
+    if (showTapHint) {
+      deferredBrowserTts = job
+      notifyAudioNeedsTap(true)
+      console.info('[Audio] iPhone — Tap for sound (browser TTS)')
+      return
+    }
+    armSilentGestureBrowserTts(job)
+  })
+}
+
+/**
+ * Choocha-style: try Safari speak() immediately (no tap).
+ * If iOS swallows it, arm the next natural touch — button only as last resort.
+ */
+export function speakBrowserTtsAuto(
+  text,
+  { onStart, onEnd, onError, voice = null, lang = 'hi-IN', rate = 1.06, pitch = 1 } = {},
+) {
+  const trimmed = String(text ?? '').trim()
+  return new Promise((resolve) => {
+    if (!trimmed) {
+      onEnd?.()
+      resolve()
+      return
+    }
+
+    // Already unlocked once this session — delayed speak usually works (Choocha path).
+    if (appleGestureUnlocked || !isAppleMobileBrowser()) {
+      const synth = window.speechSynthesis
+      if (!synth) {
+        onEnd?.()
+        resolve()
+        return
+      }
+      try {
+        synth.resume?.()
+      } catch {
+        // ignore
+      }
+      const utterance = new SpeechSynthesisUtterance(trimmed)
+      if (voice) {
+        utterance.voice = voice
+        utterance.lang = voice.lang || lang
+      } else {
+        utterance.lang = lang
+      }
+      utterance.rate = rate
+      utterance.pitch = pitch
+      utterance.onstart = () => {
+        appleGestureUnlocked = true
+        startSpeechLipSync()
+        onStart?.()
+      }
+      utterance.onend = () => {
+        onEnd?.()
+        resolve()
+      }
+      utterance.onerror = () => {
+        onEnd?.()
+        resolve()
+      }
+      synth.speak(utterance)
+      return
+    }
+
+    const synth = window.speechSynthesis
+    if (!synth) {
+      onEnd?.()
+      resolve()
+      return
+    }
+
+    let settled = false
+    let started = false
+    const utterance = new SpeechSynthesisUtterance(trimmed)
+    if (voice) {
+      utterance.voice = voice
+      utterance.lang = voice.lang || lang
+    } else {
+      utterance.lang = lang
+    }
+    utterance.rate = rate
+    utterance.pitch = pitch
+
+    const finish = () => {
+      if (settled) return
+      settled = true
+      onEnd?.()
+      resolve()
+    }
+
+    utterance.onstart = () => {
+      started = true
+      appleGestureUnlocked = true
+      mobileAudioPrimed = true
+      startSpeechLipSync()
+      onStart?.()
+    }
+    utterance.onend = () => {
+      // cancel() before gesture-arm can fire onend without ever starting — ignore that.
+      if (!started) return
+      finish()
+    }
+    utterance.onerror = () => {
+      if (started) finish()
+      // else: gesture arm owns resolve
+    }
+
+    try {
+      synth.resume?.()
+      synth.speak(utterance)
+    } catch {
+      // ignore — arm gesture below
+    }
+
+    // If Safari never starts (typical after long video/Gemini delay), arm natural touch.
+    window.setTimeout(() => {
+      if (settled || started) return
+      try {
+        synth.cancel()
+      } catch {
+        // ignore
+      }
+      console.info('[Audio] iPhone auto speak blocked — arming next touch (no button yet)')
+      armSilentGestureBrowserTts({
+        text: trimmed,
+        voice,
+        lang,
+        rate,
+        pitch,
+        callbacks: { onStart, onEnd, onError },
+        resolvePlay: resolve,
+      })
+    }, 700)
+  })
 }
 
 function queueTtsBlobForUserGesture(blob, callbacks) {
@@ -337,21 +632,15 @@ export function unlockMobileSpeechAudio({ force = false, speechPing = false } = 
     return
   }
 
-  void ensureMobileAudioUnlocked({ force }).then((ok) => {
-    notifyAudioNeedsTap(Boolean(pendingHtmlPlay || deferredTtsJob))
-    if (!ok || !speechPing || !isAppleMobileBrowser()) return
-    const synth = window.speechSynthesis
-    if (!synth) return
-    try {
-      synth.cancel()
-      synth.resume?.()
-      const ping = new SpeechSynthesisUtterance(' ')
-      ping.volume = 0.01
-      ping.rate = 1.2
-      synth.speak(ping)
-    } catch {
-      // ignore
-    }
+  // Must stay sync inside the gesture — async .then() loses Safari permission.
+  if (speechPing) {
+    primeSafariSpeechSynthesis()
+  }
+
+  void ensureMobileAudioUnlocked({ force }).then(() => {
+    notifyAudioNeedsTap(
+      Boolean(pendingHtmlPlay || deferredTtsJob || deferredBrowserTts?.text),
+    )
   })
 }
 
@@ -374,10 +663,19 @@ function stopBufferSource() {
 export function stopElevenLabsSpeech() {
   disconnectTtsAudio()
   pendingHtmlPlay = null
+  clearSilentGestureArm()
+  if (deferredBrowserTts) {
+    const job = deferredBrowserTts
+    deferredBrowserTts = null
+    notifyAudioNeedsTap(false)
+    job.callbacks?.onEnd?.()
+    job.resolvePlay?.()
+  }
   if (deferredTtsJob) {
     const job = deferredTtsJob
     deferredTtsJob = null
     notifyAudioNeedsTap(false)
+    job.callbacks?.onEnd?.()
     job.resolvePlay?.()
   }
   if (currentAbort) {

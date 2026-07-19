@@ -36,6 +36,8 @@ import {
   ensureMobileAudioUnlocked,
   isElevenLabsConfigured,
   playQueuedTtsFromUserGesture,
+  primeSafariSpeechSynthesis,
+  speakBrowserTtsAuto,
   speakWithElevenLabs,
   unlockMobileSpeechAudio,
   stopElevenLabsSpeech,
@@ -110,7 +112,6 @@ const LIVE_MIC_SILENCE_MS = 2200
 /** Visual energy only — does not gate send */
 const LIVE_MIC_VOICE_ENERGY = 20
 /** If target video is stuck on Safari, still start Myra welcome after verify */
-const WELCOME_AFTER_VERIFY_FALLBACK_MS = 4500
 /** Never block mic/keyboard UI if TTS never fires ended on mobile Safari */
 const MYRA_TTS_SAFETY_MS = 35000
 
@@ -358,7 +359,8 @@ function IntroLoadingScreen({
       role="status"
       aria-live="polite"
       aria-label="Loading Richera experience"
-      onTouchStart={() => unlockMobileSpeechAudio({ force: true })}
+      onTouchStart={() => unlockMobileSpeechAudio({ force: true, speechPing: true })}
+      onClick={() => unlockMobileSpeechAudio({ force: true, speechPing: true })}
     >
       <div className="intro-loading__stage">
         <img src={INTRO_LOADING_BG} alt="" className="intro-loading__bg" aria-hidden />
@@ -409,7 +411,13 @@ function IntroShell({
   const [handoff, setHandoff] = useState(false)
 
   useEffect(() => {
-    const prime = () => unlockMobileSpeechAudio({ force: true })
+    // Choocha-style: first real gesture unlocks Safari speechSynthesis (empty speak).
+    // Later touches only refresh AudioContext — repeating speak('') interrupts Myra.
+    let speechPrimed = false
+    const prime = () => {
+      unlockMobileSpeechAudio({ force: true, speechPing: !speechPrimed })
+      speechPrimed = true
+    }
     document.addEventListener('touchstart', prime, { passive: true })
     document.addEventListener('click', prime, { passive: true })
     return () => {
@@ -1305,7 +1313,8 @@ function App() {
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
     pauseLiveMicCapture()
-    await ensureMobileAudioUnlocked({ force: true })
+    // Do not await unlock here — it can steal the gesture window. Choocha speaks browser TTS directly.
+    void ensureMobileAudioUnlocked({ force: true })
     aiSpeakingRef.current = true
 
     let speechFinished = false
@@ -1351,6 +1360,21 @@ function App() {
         console.error('[ElevenLabs] TTS failed, using browser voice:', error)
         setIsAiThinking(false)
       }
+    }
+
+    // iPhone: try Safari voice immediately (Choocha). No Tap button unless auto-speak fails
+    // and the user also never touches the screen for a few seconds.
+    if (isAppleMobileBrowser()) {
+      setJarvisUiReady(true)
+      await speakBrowserTtsAuto(speechText, {
+        onStart: startTalkingAnimation,
+        onEnd: finish,
+        voice: myraVoiceRef.current,
+        lang: myraVoiceRef.current?.lang || 'hi-IN',
+        rate: 1.06,
+        pitch: 1,
+      })
+      return
     }
 
     speakWithBrowserTts(speechText, finish, startTalkingAnimation)
@@ -2548,9 +2572,11 @@ function mapGeminiCallType(reason) {
       setShowScanGuide(false)
       setArError(null)
 
+      // Start welcome ASAP after verify (overlap video) so Safari voice is closer to
+      // the last user touch — Choocha works because speak follows scan tap quickly.
       ensureMyraWelcome({
-        delayMs: targetVideoDoneRef.current ? 0 : WELCOME_AFTER_VERIFY_FALLBACK_MS,
-        reason: targetVideoDoneRef.current ? 'verify-video-done' : 'verify-fallback',
+        delayMs: targetVideoDoneRef.current ? 0 : 400,
+        reason: targetVideoDoneRef.current ? 'verify-video-done' : 'verify-early',
       })
     },
     [ensureMyraWelcome, speakMyraErrorLine],
@@ -2569,7 +2595,9 @@ function mapGeminiCallType(reason) {
       const gen = ++verifyGenerationRef.current
       scanSnapInFlightRef.current = true
       setShowScanGuide(false)
+      // Best-effort (MindAR track is not always a user gesture). Real unlock is on camera tap.
       unlockMobileSpeechAudio({ force: true, speechPing: true })
+      primeSafariSpeechSynthesis()
 
       const canvas = drawVideoFrameToCanvas(videoEl)
       scanSnapshotRef.current = null
@@ -3294,10 +3322,12 @@ function mapGeminiCallType(reason) {
                   onPointerDown={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
-                    // play() must start in this gesture — do not await anything first.
+                    // speak()/play() must start in this gesture — do not await anything first.
                     const played = playQueuedTtsFromUserGesture()
                     if (!played) {
                       unlockMobileSpeechAudio({ force: true, speechPing: true })
+                      // Keep button visible until the queue actually starts (event will hide it).
+                      return
                     }
                     setNeedsAudioTap(false)
                   }}

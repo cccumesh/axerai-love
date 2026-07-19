@@ -1,4 +1,4 @@
-/** Block pinch/double-tap zoom, text selection, and keep the AR app in portrait. */
+/** Block pinch/double-tap zoom and ask the OS for portrait (phones only). */
 
 function isPhoneShell() {
   const ua = navigator.userAgent || ''
@@ -12,36 +12,18 @@ function tryLockPortrait() {
   if (!isPhoneShell()) return
   const orientation = screen.orientation
   if (!orientation?.lock) return
-  orientation.lock('portrait-primary').catch(() => {})
-  orientation.lock?.('portrait').catch(() => {})
-}
-
-/**
- * If the OS still rotates (common on iPhone Safari), keep the app visually portrait
- * by counter-rotating the root — no message overlay.
- */
-function syncForcedPortrait() {
-  const root = document.documentElement
-  if (!isPhoneShell()) {
-    root.classList.remove('axerai-phone-landscape')
-    return
-  }
-
-  tryLockPortrait()
-
-  const type = screen.orientation?.type ?? ''
-  const angle = Number(screen.orientation?.angle ?? window.orientation ?? 0)
-  const landscape = type.startsWith('landscape') || Math.abs(angle) === 90 || Math.abs(angle) === 270
-  root.classList.toggle('axerai-phone-landscape', landscape)
-
-  // Match OS rotate direction so the UI stays upright (portrait) with no message.
-  let rotate = '90deg'
-  if (angle === 90 || type === 'landscape-primary') rotate = '-90deg'
-  if (angle === 270 || angle === -90 || type === 'landscape-secondary') rotate = '90deg'
-  root.style.setProperty('--axerai-lock-rotate', rotate)
+  // One call only — dual lock() can reject and confuse some Android browsers.
+  const lock = orientation.lock.bind(orientation)
+  Promise.resolve(lock('portrait-primary')).catch(() => {
+    Promise.resolve(lock('portrait')).catch(() => {})
+  })
 }
 
 export function initAxeraiMobileShell() {
+  // Never fake-rotate #root — that breaks MindAR / getUserMedia preview sizing.
+  document.documentElement.classList.remove('axerai-phone-landscape')
+  document.documentElement.style.removeProperty('--axerai-lock-rotate')
+
   const blockMultiTouch = (event) => {
     if (event.touches?.length > 1) event.preventDefault()
   }
@@ -79,17 +61,11 @@ export function initAxeraiMobileShell() {
   document.addEventListener('dblclick', (event) => event.preventDefault(), { passive: false })
 
   tryLockPortrait()
-  syncForcedPortrait()
 
+  // Lock only after a real gesture — required on most browsers.
   document.addEventListener('pointerdown', tryLockPortrait, { passive: true })
   window.addEventListener('orientationchange', () => {
-    tryLockPortrait()
-    window.setTimeout(syncForcedPortrait, 50)
-    window.setTimeout(syncForcedPortrait, 300)
+    window.setTimeout(tryLockPortrait, 50)
   })
-  screen.orientation?.addEventListener?.('change', () => {
-    tryLockPortrait()
-    syncForcedPortrait()
-  })
-  window.addEventListener('resize', syncForcedPortrait)
+  screen.orientation?.addEventListener?.('change', tryLockPortrait)
 }

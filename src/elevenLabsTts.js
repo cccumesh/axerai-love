@@ -94,18 +94,26 @@ export async function ensureMobileAudioUnlocked({ force = false } = {}) {
 
   unlockInFlight = (async () => {
     try {
+      const withTimeout = (promise, ms) =>
+        Promise.race([
+          promise,
+          new Promise((resolve) => setTimeout(() => resolve('timeout'), ms)),
+        ])
+
       const ctx = getSharedAudioContext()
       if (ctx?.state === 'suspended') {
-        await ctx.resume()
+        await withTimeout(ctx.resume(), 800)
       }
 
       const audio = getPrimedAudioElement()
       audio.muted = true
       audio.volume = 0.01
       audio.src = SILENT_WAV
-      await audio.play()
-      audio.pause()
-      audio.currentTime = 0
+      const playResult = await withTimeout(audio.play(), 1200)
+      if (playResult !== 'timeout') {
+        audio.pause()
+        audio.currentTime = 0
+      }
       audio.muted = false
       audio.volume = 1
 

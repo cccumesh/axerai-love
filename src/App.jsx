@@ -1008,8 +1008,8 @@ function App() {
 
   const grantStartupAccess = useCallback(async () => {
     requestGeolocationInBackground()
-    // Same tap that allows camera also unlocks iPhone audio (no separate sound button).
-    await ensureMobileAudioUnlocked({ force: true })
+    // Never block camera on audio unlock — iOS/Android play() can hang.
+    void ensureMobileAudioUnlocked({ force: true })
     unlockMobileSpeechAudio({ force: true, speechPing: true })
 
     const stream = await acquireStartupStream()

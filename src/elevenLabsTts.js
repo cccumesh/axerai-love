@@ -4,7 +4,7 @@ import { isAppleMobileBrowser } from './mobileBrowser.js'
 
 const ELEVENLABS_API_KEY = String(import.meta.env.VITE_ELEVENLABS_API_KEY ?? '').trim()
 const ELEVENLABS_VOICE_ID = String(import.meta.env.VITE_ELEVENLABS_VOICE_ID ?? '').trim()
-const ELEVENLABS_MODEL = 'eleven_multilingual_v2'
+const ELEVENLABS_MODEL = 'eleven_v3'
 
 let currentAudio = null
 let currentAbort = null
@@ -53,7 +53,7 @@ let currentObjectUrl = null
 /** If iOS blocks play(), retry once on the next user gesture. */
 let pendingHtmlPlay = null
 /**
- * iPhone: TTS blob ready, waiting for Tap for sound.
+ * iPhone: TTS blob ready, waiting for Meet Myra begin tap.
  * play() MUST start inside the pointerdown handler (same user gesture).
  */
 let deferredTtsJob = null
@@ -307,7 +307,7 @@ function playQueuedBrowserTtsFromGesture() {
 }
 
 /**
- * Call from Tap for sound pointerdown ONLY — starts play/speak in the same gesture.
+ * Call from Meet Myra / Begin pointerdown — starts play/speak in the same gesture.
  * This is the reliable iPhone path (autoplay after Gemini delay always fails).
  */
 export function playQueuedTtsFromUserGesture() {
@@ -413,38 +413,31 @@ function clearSilentGestureArm() {
 }
 
 /**
- * Queue Safari TTS for the next real touch/click — no button required.
- * Only shows "Tap for sound" if nothing arrives for a few seconds.
+ * Queue Safari TTS for the next real touch — show branded Meet Myra gate immediately.
  */
 function armSilentGestureBrowserTts(job) {
   clearSilentGestureArm()
 
   deferredBrowserTts = job
-  // Prefer invisible unlock via natural touch (holding phone / adjusting aim).
-  notifyAudioNeedsTap(false)
+  notifyAudioNeedsTap(true)
 
   const events = ['pointerdown', 'touchstart', 'click']
-  const onGesture = () => {
+  const onGesture = (event) => {
+    // Let the Meet Myra button handle its own pointerdown; still unlock on any other touch.
+    if (event?.target?.closest?.('.axerai-audio-tap')) return
     if (!deferredBrowserTts || deferredBrowserTts !== job) return
     clearSilentGestureArm()
     playQueuedBrowserTtsFromGesture()
   }
 
-  const hintTimer = window.setTimeout(() => {
-    if (deferredBrowserTts === job) {
-      notifyAudioNeedsTap(true)
-      console.info('[Audio] iPhone — still waiting; showing Tap for sound')
-    }
-  }, 2800)
-
-  silentGestureArm = { listener: onGesture, events, hintTimer }
+  silentGestureArm = { listener: onGesture, events, hintTimer: null }
   events.forEach((type) => {
     window.addEventListener(type, onGesture, { capture: true, passive: true })
   })
-  console.info('[Audio] iPhone — waiting for natural touch to start Safari voice')
+  console.info('[Audio] Meet Myra gate — waiting for begin tap')
 }
 
-/** Queue Safari speechSynthesis until user taps Tap for sound. */
+/** Queue Safari speechSynthesis until Meet Myra begin tap. */
 export function queueBrowserTtsForUserGesture(
   text,
   { onStart, onEnd, onError, voice = null, lang = 'hi-IN', rate = 1.06, pitch = 1, showTapHint = true } = {},
@@ -473,7 +466,7 @@ export function queueBrowserTtsForUserGesture(
     if (showTapHint) {
       deferredBrowserTts = job
       notifyAudioNeedsTap(true)
-      console.info('[Audio] iPhone — Tap for sound (browser TTS)')
+      console.info('[Audio] Meet Myra gate (browser TTS)')
       return
     }
     armSilentGestureBrowserTts(job)
@@ -481,8 +474,7 @@ export function queueBrowserTtsForUserGesture(
 }
 
 /**
- * Choocha-style: try Safari speak() immediately (no tap).
- * If iOS swallows it, arm the next natural touch — button only as last resort.
+ * Safari TTS: after unlock, speak directly. First iPhone unlock → Meet Myra gate (branded).
  */
 export function speakBrowserTtsAuto(
   text,
@@ -496,8 +488,7 @@ export function speakBrowserTtsAuto(
       return
     }
 
-    // Already unlocked once this session — delayed speak usually works (Choocha path).
-    if (appleGestureUnlocked || !isAppleMobileBrowser()) {
+    const speakDirect = () => {
       const synth = window.speechSynthesis
       if (!synth) {
         onEnd?.()
@@ -532,78 +523,24 @@ export function speakBrowserTtsAuto(
         resolve()
       }
       synth.speak(utterance)
+    }
+
+    // Already unlocked this session — delayed speak usually works.
+    if (appleGestureUnlocked || !isAppleMobileBrowser()) {
+      speakDirect()
       return
     }
 
-    const synth = window.speechSynthesis
-    if (!synth) {
-      onEnd?.()
-      resolve()
-      return
-    }
-
-    let settled = false
-    let started = false
-    const utterance = new SpeechSynthesisUtterance(trimmed)
-    if (voice) {
-      utterance.voice = voice
-      utterance.lang = voice.lang || lang
-    } else {
-      utterance.lang = lang
-    }
-    utterance.rate = rate
-    utterance.pitch = pitch
-
-    const finish = () => {
-      if (settled) return
-      settled = true
-      onEnd?.()
-      resolve()
-    }
-
-    utterance.onstart = () => {
-      started = true
-      appleGestureUnlocked = true
-      mobileAudioPrimed = true
-      startSpeechLipSync()
-      onStart?.()
-    }
-    utterance.onend = () => {
-      // cancel() before gesture-arm can fire onend without ever starting — ignore that.
-      if (!started) return
-      finish()
-    }
-    utterance.onerror = () => {
-      if (started) finish()
-      // else: gesture arm owns resolve
-    }
-
-    try {
-      synth.resume?.()
-      synth.speak(utterance)
-    } catch {
-      // ignore — arm gesture below
-    }
-
-    // If Safari never starts (typical after long video/Gemini delay), arm natural touch.
-    window.setTimeout(() => {
-      if (settled || started) return
-      try {
-        synth.cancel()
-      } catch {
-        // ignore
-      }
-      console.info('[Audio] iPhone auto speak blocked — arming next touch (no button yet)')
-      armSilentGestureBrowserTts({
-        text: trimmed,
-        voice,
-        lang,
-        rate,
-        pitch,
-        callbacks: { onStart, onEnd, onError },
-        resolvePlay: resolve,
-      })
-    }, 700)
+    // First iPhone voice = intentional Meet Myra moment (not a tech error label).
+    armSilentGestureBrowserTts({
+      text: trimmed,
+      voice,
+      lang,
+      rate,
+      pitch,
+      callbacks: { onStart, onEnd, onError },
+      resolvePlay: resolve,
+    })
   })
 }
 
@@ -616,7 +553,7 @@ function queueTtsBlobForUserGesture(blob, callbacks) {
       resolvePlay: resolve,
     }
     notifyAudioNeedsTap(true)
-    console.info('[Audio] iPhone — Tap for sound to play Myra voice')
+    console.info('[Audio] Meet Myra gate (ElevenLabs)')
   })
 }
 
@@ -963,7 +900,7 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
         callbacks: { onStart, onEnd, onError },
       }
       notifyAudioNeedsTap(true)
-      console.warn('[Audio] iOS blocked TTS — waiting for next tap to play')
+      console.warn('[Audio] iOS blocked TTS — Meet Myra gate')
       return
     }
     cleanup()
@@ -1149,8 +1086,7 @@ export async function speakWithElevenLabs(
     throw new Error('No ElevenLabs voice available')
   }
 
-  // iPhone after Gemini delay: autoplay fails — always wait for Tap for sound
-  // until one gesture play succeeds; after that try autoplay.
+  // iPhone first voice: Meet Myra gate until one gesture play succeeds.
   const needsGesture =
     requireUserGesture || (isAppleMobileBrowser() && !appleGestureUnlocked)
 

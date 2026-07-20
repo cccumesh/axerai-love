@@ -1,4 +1,4 @@
-const MODEL_ID = 'eleven_multilingual_v2'
+const MODEL_ID = 'eleven_v3'
 
 export default async (request) => {
   if (request.method !== 'POST') {

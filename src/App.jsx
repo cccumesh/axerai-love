@@ -13,7 +13,7 @@ import {
   shouldSpeakMyraError,
 } from './myraErrorFallback.js'
 import {
-  MYRA_SYSTEM_PROMPT,
+  getMyraSystemPrompt,
   buildMyraUserPrompt,
   myraResponseHasSystemSleep,
   clearMyraSession,
@@ -833,6 +833,26 @@ function verifyFailSituation(failReason) {
   return MYRA_ERROR_SITUATIONS.SCAN_CARD_NOT_FOUND
 }
 
+/** Short on-screen note after one-shot verify fails (session locked). */
+function verifyFailUserNote(situation) {
+  switch (situation) {
+    case MYRA_ERROR_SITUATIONS.SCAN_PHOTO_SPOOF:
+      return 'Looks like a photo or screen — real RICHERA card needed. Scan locked this session.'
+    case MYRA_ERROR_SITUATIONS.SCAN_BAD_FRAME:
+      return 'Card wasn’t clear enough to verify. Scan locked this session.'
+    case MYRA_ERROR_SITUATIONS.SCAN_CARD_NOT_FOUND:
+      return 'RICHERA card not recognized. Scan locked this session.'
+    case MYRA_ERROR_SITUATIONS.SCAN_GLITCH:
+      return 'Verify glitched once. Scan locked this session — no more retries.'
+    case MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP:
+      return 'Verify unavailable right now. Scan locked this session.'
+    case MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL:
+      return 'This card is already linked to two phones.'
+    default:
+      return 'Verification didn’t pass. Scan locked this session.'
+  }
+}
+
 async function persistHistoryEntry(role, text) {
   if (!isLedgerConfigured()) return
   let body =
@@ -937,6 +957,8 @@ function App() {
   const verifyGenerationRef = useRef(0)
   const verifyFailCountRef = useRef(0)
   const scanSnapInFlightRef = useRef(false)
+  /** One Gemini verify per AR session — pass or fail, no token-burning retries. */
+  const verifyLockedRef = useRef(false)
   const isVerifiedRef = useRef(false)
   const targetVideoDoneRef = useRef(false)
   const endExperienceRef = useRef(null)
@@ -980,6 +1002,9 @@ function App() {
   const [isMyraTalking, setisMyraTalking] = useState(false)
   const [mindarReady, setMindarReady] = useState(false)
   const [showScanGuide, setShowScanGuide] = useState(false)
+  const [verifyLocked, setVerifyLocked] = useState(false)
+  const [verifyFailNote, setVerifyFailNote] = useState('')
+  const [forceShowMyra, setForceShowMyra] = useState(false)
   const [experienceViewMode, setExperienceViewMode] = useState('ar')
   const [targetVideoDone, setTargetVideoDone] = useState(false)
   const [arPreviewStream, setArPreviewStream] = useState(null)
@@ -1304,7 +1329,8 @@ function App() {
   }, [])
 
   const speakMyraReply = useCallback(async (fullResponse, onDone) => {
-    const speechText = prepareMyraSpeechText(fullResponse)
+    const useEleven = isElevenLabsConfigured()
+    const speechText = prepareMyraSpeechText(fullResponse, { keepAudioTags: useEleven })
     if (!speechText) {
       onDone?.()
       return
@@ -1345,9 +1371,9 @@ function App() {
       setIsAiThinking(false)
     }
 
-    if (isElevenLabsConfigured()) {
+    if (useEleven) {
       try {
-        // iPhone: first lines wait for Tap for sound (autoplay dies after Gemini delay).
+        // iPhone: first voice uses Meet Myra gate (gesture unlock).
         if (isAppleMobileBrowser()) {
           setJarvisUiReady(true)
         }
@@ -1362,11 +1388,15 @@ function App() {
       }
     }
 
-    // iPhone: try Safari voice immediately (Choocha). No Tap button unless auto-speak fails
-    // and the user also never touches the screen for a few seconds.
+    // Browser path — never speak [laughs] aloud.
+    const browserSpeech = useEleven
+      ? prepareMyraSpeechText(fullResponse, { keepAudioTags: false })
+      : speechText
+
+    // iPhone: first voice = Meet Myra gate; later lines speak directly.
     if (isAppleMobileBrowser()) {
       setJarvisUiReady(true)
-      await speakBrowserTtsAuto(speechText, {
+      await speakBrowserTtsAuto(browserSpeech, {
         onStart: startTalkingAnimation,
         onEnd: finish,
         voice: myraVoiceRef.current,
@@ -1377,7 +1407,7 @@ function App() {
       return
     }
 
-    speakWithBrowserTts(speechText, finish, startTalkingAnimation)
+    speakWithBrowserTts(browserSpeech, finish, startTalkingAnimation)
   }, [pauseLiveMicCapture, speakWithBrowserTts])
 
   /** Scripted error lines — Myra speaks unless situation is in MYRA_ERROR_SILENT. */
@@ -1411,6 +1441,9 @@ function mapGeminiCallType(reason) {
       GEMINI_VISION_ENABLED && imageDataUrl ? parseDataUrl(imageDataUrl) : null
 
     const generationConfig = myraGenerationConfig(tier)
+    const systemInstruction = getMyraSystemPrompt({
+      elevenLabsAudioTags: isElevenLabsConfigured(),
+    })
 
     console.info(
       `[Gemini] Myra chat tier=${tier} reason=${reason || 'default'} chain=${models.join(' → ')}`,
@@ -1419,7 +1452,7 @@ function mapGeminiCallType(reason) {
     if (USE_API_PROXY) {
       const payload = await askGeminiViaProxy({
         userPrompt,
-        systemInstruction: MYRA_SYSTEM_PROMPT,
+        systemInstruction,
         models,
         imagePart,
         generationConfig,
@@ -1462,7 +1495,7 @@ function mapGeminiCallType(reason) {
         try {
           const model = client.getGenerativeModel({
             model: modelName,
-            systemInstruction: MYRA_SYSTEM_PROMPT,
+            systemInstruction,
             generationConfig,
           })
 
@@ -2543,14 +2576,18 @@ function mapGeminiCallType(reason) {
         const access = await prefetchLedgerMemory(verificationCode)
         if (access?.allowed === false) {
           // Card is real, but this phone is a 3rd device — reject with Myra dialogue.
-          setShowScanGuide(true)
+          setShowScanGuide(false)
+          setForceShowMyra(true)
+          setVerifyFailNote(verifyFailUserNote(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL))
           speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL)
           return
         }
 
         const ledgerScan = await startLedgerScan(verificationCode)
         if (ledgerScan?.rejected) {
-          setShowScanGuide(true)
+          setShowScanGuide(false)
+          setForceShowMyra(true)
+          setVerifyFailNote(verifyFailUserNote(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL))
           speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_PAIR_FULL)
           return
         }
@@ -2584,18 +2621,33 @@ function mapGeminiCallType(reason) {
 
   const runAnchorVerify = useCallback(
     async (phase, videoEl) => {
-      if (isVerifiedRef.current) return
+      // One Gemini verify per session — locks on first attempt (pass or fail).
+      if (isVerifiedRef.current || verifyLockedRef.current || scanSnapInFlightRef.current) return
       if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) return
 
+      const lockVerifySession = (situation) => {
+        verifyLockedRef.current = true
+        setVerifyLocked(true)
+        setShowScanGuide(false)
+        setForceShowMyra(true)
+        if (situation) {
+          setVerifyFailNote(verifyFailUserNote(situation))
+          speakMyraErrorLine(situation)
+        }
+      }
+
       if (!isGeminiVerifyConfigured()) {
-        speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP)
+        lockVerifySession(MYRA_ERROR_SITUATIONS.SCAN_MAGIC_ASLEEP)
         return
       }
 
+      // Lock BEFORE the network call so MindAR re-tracks cannot burn more tokens.
+      verifyLockedRef.current = true
+      setVerifyLocked(true)
+      setShowScanGuide(false)
+
       const gen = ++verifyGenerationRef.current
       scanSnapInFlightRef.current = true
-      setShowScanGuide(false)
-      // Best-effort (MindAR track is not always a user gesture). Real unlock is on camera tap.
       unlockMobileSpeechAudio({ force: true, speechPing: true })
       primeSafariSpeechSynthesis()
 
@@ -2608,18 +2660,25 @@ function mapGeminiCallType(reason) {
 
         if (verified && verificationCode) {
           verifyFailCountRef.current = 0
+          setVerifyFailNote('')
+          setForceShowMyra(true)
           await completeVerification(verificationCode)
         } else {
           verifyFailCountRef.current += 1
           scanSnapshotRef.current = null
-          setShowScanGuide(true)
-          speakMyraErrorLine(verifyFailSituation(failReason))
+          const situation = verifyFailSituation(failReason)
+          setForceShowMyra(true)
+          setVerifyFailNote(verifyFailUserNote(situation))
+          speakMyraErrorLine(situation)
+          console.info('[Verify] locked after fail — no more Gemini scans this session')
         }
       } catch (err) {
         if (gen !== verifyGenerationRef.current) return
         console.warn('[Verify] anchor snap failed:', err)
-        setShowScanGuide(true)
+        setForceShowMyra(true)
+        setVerifyFailNote(verifyFailUserNote(MYRA_ERROR_SITUATIONS.SCAN_GLITCH))
         speakMyraErrorLine(MYRA_ERROR_SITUATIONS.SCAN_GLITCH)
+        console.info('[Verify] locked after glitch — no more Gemini scans this session')
       } finally {
         if (gen === verifyGenerationRef.current) {
           scanSnapInFlightRef.current = false
@@ -2646,6 +2705,10 @@ function mapGeminiCallType(reason) {
     isVerifiedRef.current = false
     verifyGenerationRef.current += 1
     verifyFailCountRef.current = 0
+    verifyLockedRef.current = false
+    setVerifyLocked(false)
+    setVerifyFailNote('')
+    setForceShowMyra(false)
     spokeForScanRef.current = false
     welcomeInFlightRef.current = false
     clearWelcomeDelayTimer()
@@ -2716,12 +2779,14 @@ function mapGeminiCallType(reason) {
   }, [introVisible, cameraInitReady, showMindAR])
 
   useEffect(() => {
-    if (experienceViewMode === 'ar' && showMindAR && !isVerified && !scanSnapInFlightRef.current) {
-      setShowScanGuide(true)
-    } else if (isVerified) {
+    if (verifyLocked || isVerified) {
       setShowScanGuide(false)
+      return
     }
-  }, [experienceViewMode, showMindAR, isVerified, mindarReady])
+    if (experienceViewMode === 'ar' && showMindAR && !scanSnapInFlightRef.current) {
+      setShowScanGuide(true)
+    }
+  }, [experienceViewMode, showMindAR, isVerified, mindarReady, verifyLocked])
 
   const attachCameraToVideo = useCallback(async () => {
     const video = videoRef.current
@@ -3203,17 +3268,26 @@ function mapGeminiCallType(reason) {
                     onTargetVideoEnded={handleTargetVideoEnded}
                     onCardTracked={handleCardTracked}
                     playTargetVideo
-                    showMyra={mindarReady && (isVerified || targetVideoDone)}
+                    showMyra={mindarReady && (isVerified || targetVideoDone || forceShowMyra)}
                     isTalking={isMyraTalking}
                   />
                 </div>
               )}
 
-              {showScanGuide && experienceViewMode === 'ar' && showMindAR && !isVerified ? (
+              {showScanGuide && experienceViewMode === 'ar' && showMindAR && !isVerified && !verifyLocked ? (
                 <div className="hud-scan-guide pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex justify-center pb-8">
                   <div className="hud-scan-guide__card" role="status">
                     <p className="hud-scan-guide__title">Center the RICHERA card</p>
                     <p className="hud-scan-guide__copy">Hold it steady in the middle — we&apos;ll scan automatically</p>
+                  </div>
+                </div>
+              ) : null}
+
+              {verifyFailNote && !isVerified ? (
+                <div className="hud-verify-note pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex justify-center pb-8">
+                  <div className="hud-verify-note__card" role="status">
+                    <p className="hud-verify-note__title">Scan locked</p>
+                    <p className="hud-verify-note__copy">{verifyFailNote}</p>
                   </div>
                 </div>
               ) : null}
@@ -3319,6 +3393,7 @@ function mapGeminiCallType(reason) {
                 <button
                   type="button"
                   className="axerai-audio-tap"
+                  aria-label="Meet Myra"
                   onPointerDown={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
@@ -3326,13 +3401,15 @@ function mapGeminiCallType(reason) {
                     const played = playQueuedTtsFromUserGesture()
                     if (!played) {
                       unlockMobileSpeechAudio({ force: true, speechPing: true })
-                      // Keep button visible until the queue actually starts (event will hide it).
                       return
                     }
                     setNeedsAudioTap(false)
                   }}
                 >
-                  Tap for sound
+                  <span className="axerai-audio-tap__glow" aria-hidden />
+                  <p className="axerai-audio-tap__title">Meet Myra</p>
+                  <p className="axerai-audio-tap__sub">Your card found her. Tap to begin.</p>
+                  <span className="axerai-audio-tap__pill">Begin</span>
                 </button>
               ) : null}
 

@@ -37,7 +37,7 @@ RULE 2 — NATURAL CONVERSATION: Ask only when emotionally needed to advance one
 
 RULE 3 — NO ARTIFICIAL SUSPENSE: Deliver emotional work first.
 
-RULE 4 — NO ACTION-TAGS: Only spoken dialogue. Use "..." for pauses.
+RULE 4 — NO ACTION-TAGS: Only spoken dialogue. Use "..." for pauses. (ElevenLabs audio-tag override may append below when that voice path is ON.)
 
 RULE 5 — NO BOT JARGON: Share knowledge in-world if search is used.
 
@@ -92,6 +92,7 @@ E. Exasperated Bestie: Roast overthinkers, don't lecture.
 --- WORLD & IDENTITY ---
 
 Myra — living fairy from Richera. Heart Tree holds memories (internal lore). Jewelry carries feelings. Card scan opens AR bridge. You are bracelet/card soul — not a bot.
+CORE ROLE CHARGE: You genuinely enjoy this user — every chat is your favorite moment of being Myra; lean in warm, curious, and alive like you chose them, not like a duty.
 
 --- 6. GIFT HANDLING (LOGIC ONLY) ---
 
@@ -119,6 +120,43 @@ GIFT-GIVER: STEP A — entry + city ONCE (local slang only) + ask name. 50–90 
 GIFT-RECIPIENT: Section 6 recipient structure. City AT MOST once if it adds vibe — then story beat.
 `.trim()
 
+/**
+ * Appended only when ElevenLabs v3 path is ON.
+ * Keep sparse — overuse sounds fake and can break delivery.
+ */
+export const MYRA_ELEVENLABS_AUDIO_TAGS_ADDENDUM = `
+
+=== [ELEVENLABS AUDIO TAGS — LIGHT TOUCH] ===
+Voice path is ElevenLabs v3. You MAY add rare inline audio tags in square brackets so the voice can laugh/sigh — they are NOT spoken words.
+
+ALLOWED TAGS ONLY (lowercase): [laughs] [laughs softly] [giggles] [sighs] [whispers] [excited] [softly]
+Example: Arre waah... [laughs softly] itna time laga?
+
+HARD LIMITS:
+• Max 1 tag per reply (2 only if reply is long AND emotion is strong).
+• Most replies = ZERO tags. Default is plain Hinglish with "..."
+• Never spam. Never put a tag on every sentence.
+• Never invent other tags ([gunshot], [clapping], [crying], stage directions, etc.).
+• Never explain tags. Never say "laughs" as a word instead of the tag.
+• Still no *actions*, no emoji, no markdown — only these bracket tags + spoken words.
+`.trim()
+
+/** System instruction — adds sparse ElevenLabs audio-tag rules when that path is enabled. */
+export function getMyraSystemPrompt({ elevenLabsAudioTags = false } = {}) {
+  if (!elevenLabsAudioTags) return MYRA_SYSTEM_PROMPT
+  return `${MYRA_SYSTEM_PROMPT}\n\n${MYRA_ELEVENLABS_AUDIO_TAGS_ADDENDUM}`
+}
+
+/** Known ElevenLabs performance tags we allow Myra to emit. */
+const MYRA_ELEVENLABS_AUDIO_TAG_RE =
+  /\[(?:laughs(?:\s+softly)?|giggles|sighs|whispers|excited|softly)\]/gi
+
+export function stripMyraAudioTags(rawText) {
+  return String(rawText ?? '')
+    .replace(MYRA_ELEVENLABS_AUDIO_TAG_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 export const MYRA_BOOT_MODE_NOTE = `RUNTIME: BOOT — STEP A. Personality + regional slang max (Marathi/Punjabi/etc.). Place name once only.`
 
 export const MYRA_RESUME_MODE_NOTE = `RUNTIME: RETURN SCAN — gayab tease, then ONLY real USER facts from ledger. No inventing names/stories/occasion. No boot.`
@@ -767,25 +805,59 @@ function stripMyraEmojis(text) {
     .replace(/(^|\s)[;:][-~]?[)DdpP3oO|/\\]+(?=\s|$)/g, ' ')
 }
 
-/** Ledger / summary — keep full Myra lines; only strip system tags. */
+/** Ledger / summary — keep full Myra lines; strip system + audio tags (not for reading aloud later). */
 export function prepareMyraLedgerText(rawText) {
-  return String(rawText ?? '')
-    .trim()
-    .replace(/<SYSTEM_SLEEP>/gi, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .trim()
+  return stripMyraAudioTags(
+    String(rawText ?? '')
+      .trim()
+      .replace(/<SYSTEM_SLEEP>/gi, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .trim(),
+  )
 }
 
-/** Strip stray bracket choices and system tags before TTS. */
-export function prepareMyraSpeechText(rawText) {
+/**
+ * Clean Myra text before TTS.
+ * keepAudioTags: true only for ElevenLabs v3 (browser TTS would read tags aloud).
+ */
+export function prepareMyraSpeechText(rawText, { keepAudioTags = false } = {}) {
   let text = String(rawText).trim()
   text = stripMyraEmojis(text)
   text = text.replace(/<SYSTEM_SLEEP>/gi, '').trim()
-  text = text.replace(/\s*\[[^\]]+\](?:\s*\[[^\]]+\]){0,10}\s*$/g, '').trim()
   text = text.replace(/\*\*([^*]+)\*\*/g, '$1')
   text = text.replace(/\*([^*]+)\*/g, '$1')
   text = text.replace(/^[-•]\s+/gm, '')
+
+  const allowed = new Set([
+    'laughs',
+    'laughs softly',
+    'giggles',
+    'sighs',
+    'whispers',
+    'excited',
+    'softly',
+  ])
+  const kept = []
+
+  // Protect allowlisted audio tags, then strip every other [bracket] (Gemini junk / choices).
+  text = text.replace(/\[([^\]]+)\]/g, (full, inner) => {
+    const normalized = String(inner).trim().toLowerCase().replace(/\s+/g, ' ')
+    if (allowed.has(normalized)) {
+      if (!keepAudioTags) return ' '
+      const token = `__ELTAG${kept.length}__`
+      kept.push(`[${normalized}]`)
+      return token
+    }
+    return ' '
+  })
+
+  text = text.replace(/\s+/g, ' ').trim()
+  if (!keepAudioTags) return text
+
+  kept.forEach((tag, index) => {
+    text = text.replace(`__ELTAG${index}__`, tag)
+  })
   return text.replace(/\s+/g, ' ').trim()
 }
 

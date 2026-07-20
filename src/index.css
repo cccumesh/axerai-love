@@ -538,6 +538,37 @@ body {
   color: rgba(255, 255, 255, 0.68);
 }
 
+.hud-verify-note__card {
+  max-width: min(88vw, 21rem);
+  padding: 0.85rem 1.1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(245, 201, 138, 0.28);
+  background: linear-gradient(
+    to top,
+    rgba(8, 12, 10, 0.88) 0%,
+    rgba(12, 18, 14, 0.72) 100%
+  );
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  text-align: center;
+  animation: hud-scan-guide-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hud-verify-note__title {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(245, 201, 138, 0.95);
+}
+
+.hud-verify-note__copy {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: rgba(255, 248, 231, 0.78);
+}
+
 @keyframes hud-scan-guide-in {
   from {
     opacity: 0;
@@ -1218,68 +1249,167 @@ body {
   align-items: center;
 }
 
-/* iPhone — Myra voice is queued; tap starts play() in the same gesture */
+/* iPhone unlock gate — branded “Meet Myra”, not a tech fix label */
 .axerai-audio-tap {
   position: fixed;
   z-index: 120;
-  left: 50%;
-  bottom: max(7.5rem, calc(env(safe-area-inset-bottom, 0px) + 6.5rem));
-  transform: translateX(-50%);
-  min-width: 12rem;
-  padding: 0.95rem 1.6rem;
-  border: 1px solid rgba(245, 201, 138, 0.7);
-  border-radius: 999px;
-  background: rgba(8, 12, 16, 0.94);
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 1.25rem max(2.75rem, calc(env(safe-area-inset-bottom, 0px) + 2rem));
+  border: none;
+  border-radius: 0;
+  background: linear-gradient(
+    to top,
+    rgba(4, 8, 6, 0.88) 0%,
+    rgba(6, 10, 8, 0.55) 38%,
+    rgba(6, 10, 8, 0.18) 68%,
+    transparent 100%
+  );
   color: #f8ecd4;
   font-family: Georgia, 'Times New Roman', serif;
-  font-size: 1.05rem;
-  letter-spacing: 0.03em;
-  box-shadow:
-    0 0 0 1px rgba(255, 248, 231, 0.08) inset,
-    0 12px 32px rgba(0, 0, 0, 0.45);
+  letter-spacing: 0.02em;
+  box-shadow: none;
   pointer-events: auto;
   -webkit-tap-highlight-color: transparent;
-  animation: axerai-audio-tap-pulse 1.6s ease-in-out infinite;
+  animation: axerai-meet-fade-in 0.55s ease-out both;
+  cursor: pointer;
 }
 
-.axerai-audio-tap:active {
-  transform: translateX(-50%) scale(0.97);
+.axerai-audio-tap__glow {
+  position: absolute;
+  left: 50%;
+  bottom: max(5.5rem, calc(env(safe-area-inset-bottom, 0px) + 4.6rem));
+  width: 9.5rem;
+  height: 9.5rem;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(245, 201, 138, 0.28) 0%,
+    rgba(245, 201, 138, 0.08) 42%,
+    transparent 70%
+  );
+  animation: axerai-meet-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.axerai-audio-tap__title {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: clamp(1.85rem, 6.5vw, 2.35rem);
+  font-weight: 500;
+  line-height: 1.1;
+  color: #f8ecd4;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.55);
+}
+
+.axerai-audio-tap__sub {
+  position: relative;
+  z-index: 1;
+  margin: 0.55rem 0 1.35rem;
+  max-width: 16rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 0.92rem;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: rgba(255, 248, 231, 0.72);
+  text-align: center;
+}
+
+.axerai-audio-tap__pill {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 11.5rem;
+  padding: 0.88rem 1.7rem;
+  border: 1px solid rgba(245, 201, 138, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(
+    135deg,
+    rgba(245, 201, 138, 0.22) 0%,
+    rgba(18, 24, 20, 0.92) 45%,
+    rgba(232, 201, 106, 0.18) 100%
+  );
+  color: #f8ecd4;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.02rem;
+  letter-spacing: 0.04em;
+  box-shadow:
+    0 0 0 1px rgba(255, 248, 231, 0.06) inset,
+    0 14px 36px rgba(0, 0, 0, 0.4);
+  animation: axerai-meet-pill-pulse 1.8s ease-in-out infinite;
+}
+
+.axerai-audio-tap:active .axerai-audio-tap__pill {
+  transform: scale(0.97);
   animation: none;
 }
 
-@keyframes axerai-audio-tap-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px rgba(255, 248, 231, 0.08) inset,
-      0 12px 32px rgba(0, 0, 0, 0.45);
+@keyframes axerai-meet-fade-in {
+  from {
+    opacity: 0;
   }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(255, 248, 231, 0.14) inset,
-      0 12px 32px rgba(0, 0, 0, 0.45),
-      0 0 0 6px rgba(245, 201, 138, 0.12);
+  to {
+    opacity: 1;
   }
 }
 
+@keyframes axerai-meet-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translateX(-50%) scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.06);
+  }
+}
+
+@keyframes axerai-meet-pill-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(255, 248, 231, 0.06) inset,
+      0 14px 36px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(255, 248, 231, 0.1) inset,
+      0 14px 36px rgba(0, 0, 0, 0.4),
+      0 0 0 7px rgba(245, 201, 138, 0.12);
+  }
+}
+
+/* Live mic — bottom veil only (no card/box). Dark at bottom → fade to invisible up. */
 .myra-live-mic-panel {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: 0.55rem;
+  align-items: stretch;
+  gap: 0.4rem;
   width: 100%;
-  padding: 0.65rem 0.85rem 0.75rem;
-  border-radius: 1.15rem;
-  border: 1px solid rgba(245, 201, 138, 0.38);
+  max-width: 100%;
+  padding: 2.25rem 1rem 0.55rem;
+  border: none;
+  border-radius: 0;
   background: linear-gradient(
-    135deg,
-    rgba(12, 20, 14, 0.9) 0%,
-    rgba(18, 28, 20, 0.86) 100%
+    to top,
+    rgba(6, 10, 8, 0.78) 0%,
+    rgba(8, 12, 10, 0.42) 42%,
+    rgba(8, 12, 10, 0.12) 72%,
+    transparent 100%
   );
-  backdrop-filter: blur(10px);
-  box-shadow:
-    0 0 0 1px rgba(255, 248, 231, 0.04) inset,
-    0 6px 20px rgba(0, 0, 0, 0.35);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
   pointer-events: none;
 }
 
@@ -1289,11 +1419,13 @@ body {
   justify-content: flex-end;
   width: 100%;
   min-height: 0;
-  max-height: 5.75rem;
+  max-height: 3.4rem;
   overflow-x: hidden;
   overflow-y: auto;
   touch-action: pan-y;
   scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 28%, #000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 28%, #000 100%);
 }
 
 .myra-live-mic-panel__transcript-wrap::-webkit-scrollbar {
@@ -1303,35 +1435,36 @@ body {
 .myra-live-mic-panel__text {
   margin: 0;
   width: 100%;
-  text-align: left;
-  font-size: 0.92rem;
-  line-height: 1.4;
-  color: rgba(255, 248, 231, 0.95);
+  text-align: center;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  color: rgba(255, 248, 231, 0.92);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
   word-break: break-word;
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Voice capsule — matches keyboard compose bar gold/green */
+/* Voice capsule — compact gold pill, not a panel */
 .myra-live-mic-capsule {
   position: relative;
   align-self: center;
   flex-shrink: 0;
-  width: 5rem;
-  height: 2.1rem;
+  width: 4.25rem;
+  height: 1.65rem;
   border-radius: 999px;
-  border: 1px solid rgba(245, 201, 138, 0.42);
+  border: 1px solid rgba(245, 201, 138, 0.36);
   background: linear-gradient(
     135deg,
-    rgba(245, 201, 138, 0.12) 0%,
+    rgba(245, 201, 138, 0.14) 0%,
     rgba(242, 184, 198, 0.1) 45%,
-    rgba(232, 201, 106, 0.14) 100%
+    rgba(232, 201, 106, 0.16) 100%
   );
   overflow: hidden;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
   box-shadow:
-    0 0 0 1px rgba(255, 248, 231, 0.04) inset,
-    0 0 16px rgba(245, 201, 138, 0.12);
+    0 0 0 1px rgba(255, 248, 231, 0.03) inset,
+    0 4px 14px rgba(0, 0, 0, 0.28);
 }
 
 .myra-live-mic-capsule__liquid {

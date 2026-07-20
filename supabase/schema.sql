@@ -1,5 +1,5 @@
--- Axerai Love — current ledger schema (reference / new project setup)
--- For wipe + recreate with seed rows, use fresh_start.sql instead.
+-- Axerai Love — schema reference only.
+-- Fresh setup / wipe: run supabase/fresh_start.sql (complete table + seed in one file).
 
 create table if not exists public.ledger_threads (
   id uuid primary key default gen_random_uuid(),

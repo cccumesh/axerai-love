@@ -273,8 +273,8 @@ export default function AdminDashboard() {
           </div>
           {tokenStats.entries.length === 0 ? (
             <p className="admin-dash__empty">
-              Abhi koi AI token log nahi — scan / chat / exit ke baad yahan dikhega. (Supabase me{' '}
-              <code>migrate_v6_axerai_tokens.sql</code> run karo.)
+              Abhi koi AI token log nahi — scan / chat / exit ke baad yahan dikhega. (Naya setup: Supabase me{' '}
+              <code>fresh_start.sql</code> run karo.)
             </p>
           ) : (
             <div className="admin-dash__table-wrap">
@@ -324,8 +324,8 @@ export default function AdminDashboard() {
           </div>
           {elevenStats.entries.length === 0 ? (
             <p className="admin-dash__empty">
-              Abhi koi voice token log nahi — Myra jab bolegi tab yahan dikhega. (Supabase me{' '}
-              <code>migrate_v6_axerai_tokens.sql</code> run karo.)
+              Abhi koi voice token log nahi — Myra jab bolegi tab yahan dikhega. (Naya setup: Supabase me{' '}
+              <code>fresh_start.sql</code> run karo.)
             </p>
           ) : (
             <div className="admin-dash__table-wrap">

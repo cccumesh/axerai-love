@@ -1333,26 +1333,15 @@ function App() {
     micStreamRef.current = null
   }, [])
 
-  const pauseLiveMicCapture = useCallback(() => {
-    liveMicStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = false
-    })
-  }, [])
-
-  const resumeLiveMicCapture = useCallback(() => {
-    liveMicStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = true
-    })
-  }, [])
-
   /**
-   * iPhone: track.enabled=false still keeps play-and-record session → ducks TTS.
-   * Fully stop analyser mic + recognition while Myra speaks; STT restarts via onDone.
+   * Fully release live mic while Myra thinks/speaks.
+   * track.enabled=false is NOT enough on iPhone — play-and-record still ducks TTS volume.
    */
   const releaseMicForTts = useCallback(() => {
-    pauseLiveMicCapture()
-    if (!isAppleMobileBrowser()) return
-
+    if (liveMicSilenceTimerRef.current) {
+      clearTimeout(liveMicSilenceTimerRef.current)
+      liveMicSilenceTimerRef.current = null
+    }
     try {
       liveMicRecognitionRef.current?.abort()
     } catch {
@@ -1372,7 +1361,8 @@ function App() {
     liveMicStreamRef.current?.getTracks().forEach((track) => track.stop())
     liveMicStreamRef.current = null
     setIsListening(false)
-  }, [pauseLiveMicCapture])
+    setVoiceLevels(Array(12).fill(0.15))
+  }, [])
 
   const ensureMicPermission = useCallback(async () => {
     if (startupPermissionsDoneRef.current) return true
@@ -1532,10 +1522,11 @@ function App() {
 
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
-    // Set speaking flag BEFORE releasing mic so recognition.onend does not immediately restart.
+    // Hide live-mic UI + kill mic session BEFORE audio — iOS ducks TTS if mic stays open.
     aiSpeakingRef.current = true
+    setisMyraTalking(true)
+    setIsListening(false)
     releaseMicForTts()
-    // Soft unlock only — force:true used to dip TTS volume to 0.01 and quiet the next line.
     void ensureMobileAudioUnlocked({ force: false })
 
     let speechFinished = false
@@ -1552,7 +1543,7 @@ function App() {
       aiSpeakingRef.current = false
       setisMyraTalking(false)
       setIsAiThinking(false)
-      // Mic restart is caller's job (resumeMicAfterGemini). Do not start here — double getUserMedia races.
+      // Mic + live-mic UI restart via onDone → resumeMicAfterGemini.
       onDone?.()
     }
 
@@ -1762,24 +1753,15 @@ function mapGeminiCallType(reason) {
     pttCommittedRef.current = false
     setIsListening(false)
     setIsAiThinking(true)
-    pauseLiveMicCapture()
-    if (liveMicSilenceTimerRef.current) {
-      clearTimeout(liveMicSilenceTimerRef.current)
-      liveMicSilenceTimerRef.current = null
-    }
-    liveMicPendingInterimRef.current = false
+    // Full release (not just mute) — keeps Myra volume stable on Safari/Chrome iPhone.
+    releaseMicForTts()
     try {
       jarvisRecognitionRef.current?.abort()
     } catch {
       // ignore
     }
-    try {
-      liveMicRecognitionRef.current?.abort()
-    } catch {
-      // ignore
-    }
-    liveMicRecognitionRef.current = null
-  }, [pauseLiveMicCapture])
+    jarvisRecognitionRef.current = null
+  }, [releaseMicForTts])
 
   const resumeMicAfterGemini = useCallback(async () => {
     if (!jarvisActiveRef.current) return
@@ -1792,10 +1774,8 @@ function mapGeminiCallType(reason) {
 
     if (aiSpeakingRef.current) return
 
-    // Non-Apple: tracks were only muted. Apple: stream was fully stopped → softRestart recreates.
-    resumeLiveMicCapture()
-    // Soft unlock — force:true can dip TTS volume if a line still finishing.
     unlockMobileSpeechAudio({ force: false })
+    // Stream was fully stopped — always recreate analyser + recognition.
     let ok = await startLiveMicModeRef.current({ softRestart: true })
     if (!ok) {
       await new Promise((resolve) => {
@@ -1807,7 +1787,7 @@ function mapGeminiCallType(reason) {
       console.warn('[Jarvis] Live mic could not resume after Myra reply')
       setIsListening(false)
     }
-  }, [resumeLiveMicCapture])
+  }, [])
 
   const deliverMyraGeminiResponse = useCallback(
     (fullResponse, afterSpeech) => {
@@ -2111,6 +2091,10 @@ function mapGeminiCallType(reason) {
   }, [startProceduralLiveMicLevels])
 
   const startLiveMicMode = useCallback(async ({ softRestart = false } = {}) => {
+    if (aiSpeakingRef.current || jarvisBusyRef.current) {
+      return false
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
       console.error('[Jarvis] Speech Recognition is not supported in this browser')
@@ -3611,7 +3595,11 @@ function mapGeminiCallType(reason) {
                 </button>
               ) : null}
 
-              {isVerified && jarvisUiReady && composeMode === 'liveMic' && (
+              {isVerified &&
+                jarvisUiReady &&
+                composeMode === 'liveMic' &&
+                !isMyraTalking &&
+                !isAiThinking && (
                 <div className="myra-live-mic-panel myra-compose-wrap--dock-clear absolute z-50 hud-inset-bottom">
                   <div
                     ref={liveTranscriptScrollRef}

@@ -1428,6 +1428,12 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 28%, #000 100%);
 }
 
+.myra-live-mic-panel__transcript-wrap:has(.myra-live-mic-edit) {
+  max-height: 7.5rem;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
 .myra-live-mic-panel__transcript-wrap::-webkit-scrollbar {
   display: none;
 }
@@ -1443,6 +1449,83 @@ body {
   word-break: break-word;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.myra-live-mic-panel__text--tappable {
+  pointer-events: auto;
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.myra-live-mic-panel__fix-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(245, 201, 138, 0.72);
+}
+
+.myra-live-mic-edit {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.myra-live-mic-edit__input {
+  width: 100%;
+  min-height: 2.6rem;
+  max-height: 4.8rem;
+  resize: none;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(245, 201, 138, 0.35);
+  background: rgba(8, 12, 10, 0.72);
+  color: rgba(255, 248, 231, 0.95);
+  font-size: 0.86rem;
+  line-height: 1.35;
+  padding: 0.55rem 0.7rem;
+  outline: none;
+}
+
+.myra-live-mic-edit__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.myra-live-mic-edit__btn {
+  border-radius: 999px;
+  border: 1px solid rgba(245, 201, 138, 0.3);
+  padding: 0.4rem 0.95rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.myra-live-mic-edit__btn--ghost {
+  background: rgba(255, 248, 231, 0.06);
+  color: rgba(255, 248, 231, 0.82);
+}
+
+.myra-live-mic-edit__btn--send {
+  background: linear-gradient(135deg, rgba(245, 201, 138, 0.92), rgba(232, 180, 110, 0.88));
+  color: rgba(28, 18, 10, 0.95);
+  border-color: rgba(245, 201, 138, 0.55);
+}
+
+.myra-live-mic-edit__btn--send:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Voice capsule — compact gold pill, not a panel */

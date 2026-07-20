@@ -111,7 +111,7 @@ const MINDAR_TARGET = '/targets.mind'
 const INTRO_LOADING_BG = '/images/richera-loading.png'
 /** Roman Hinglish transcript — hi-IN returns Devanagari (अ आ) on most phones */
 const SPEECH_RECO_LANG = 'en-IN'
-/** After transcript text stops changing, auto-send (ignore background noise) */
+/** After transcript text stops changing, offer send (user can tap text to fix first) */
 const LIVE_MIC_SILENCE_MS = 2200
 /** Visual energy only — does not gate send */
 const LIVE_MIC_VOICE_ENERGY = 20
@@ -1152,6 +1152,9 @@ function App() {
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
   const [liveTranscript, setLiveTranscript] = useState('')
+  const [liveMicEditing, setLiveMicEditing] = useState(false)
+  const [liveMicEditDraft, setLiveMicEditDraft] = useState('')
+  const liveMicEditingRef = useRef(false)
   const [voiceLevels, setVoiceLevels] = useState(() => Array(12).fill(0.15))
   const [needsAudioTap, setNeedsAudioTap] = useState(false)
   const userImageRef = useRef(null)
@@ -1416,6 +1419,9 @@ function App() {
     liveMicLastVoiceAtRef.current = 0
     liveMicPendingInterimRef.current = false
     setLiveTranscript('')
+    setLiveMicEditDraft('')
+    liveMicEditingRef.current = false
+    setLiveMicEditing(false)
     setVoiceLevels(Array(12).fill(0.15))
     setIsListening(false)
   }, [])
@@ -1980,6 +1986,12 @@ function mapGeminiCallType(reason) {
   const flushLiveMicUtteranceRef = useRef(null)
 
   const flushLiveMicUtterance = useCallback(() => {
+    // User is fixing STT text — never auto-send over their edit.
+    if (liveMicEditingRef.current) {
+      clearLiveMicSilenceTimer()
+      return
+    }
+
     const text = liveMicDisplayRef.current.trim()
     if (
       !text ||
@@ -1992,7 +2004,6 @@ function mapGeminiCallType(reason) {
     }
 
     // Send when transcript text is unchanged for LIVE_MIC_SILENCE_MS.
-    // Background noise must NOT delay send (voice energy is visual-only).
     const quietFor = Date.now() - liveMicLastSpeechAtRef.current
     if (quietFor < LIVE_MIC_SILENCE_MS) {
       rescheduleLiveMicSend()
@@ -2005,6 +2016,9 @@ function mapGeminiCallType(reason) {
     liveMicPendingInterimRef.current = false
     liveMicLastSpeechAtRef.current = 0
     liveMicLastVoiceAtRef.current = 0
+    liveMicEditingRef.current = false
+    setLiveMicEditing(false)
+    setLiveMicEditDraft('')
     setLiveTranscript('')
 
     sendMyraUserMessageRef.current(text)
@@ -2015,8 +2029,54 @@ function mapGeminiCallType(reason) {
   }, [flushLiveMicUtterance])
 
   const scheduleLiveMicSend = useCallback(() => {
+    if (liveMicEditingRef.current) return
     rescheduleLiveMicSend()
   }, [rescheduleLiveMicSend])
+
+  const beginLiveMicEdit = useCallback(() => {
+    const text = (liveMicDisplayRef.current || liveTranscript).trim()
+    if (!text) return
+    clearLiveMicSilenceTimer()
+    liveMicEditingRef.current = true
+    setLiveMicEditing(true)
+    setLiveMicEditDraft(text)
+  }, [clearLiveMicSilenceTimer, liveTranscript])
+
+  const cancelLiveMicEdit = useCallback(() => {
+    liveMicEditingRef.current = false
+    setLiveMicEditing(false)
+    setLiveMicEditDraft('')
+    // Recognition may have ended while editing — restart listening.
+    if (
+      composeModeRef.current === 'liveMic' &&
+      !jarvisBusyRef.current &&
+      !aiSpeakingRef.current &&
+      !liveMicRecognitionRef.current
+    ) {
+      void startLiveMicModeRef.current({ softRestart: true })
+      return
+    }
+    if (liveMicDisplayRef.current.trim()) {
+      liveMicLastSpeechAtRef.current = Date.now()
+      rescheduleLiveMicSend()
+    }
+  }, [rescheduleLiveMicSend])
+
+  const sendLiveMicEdited = useCallback(() => {
+    const text = liveMicEditDraft.trim()
+    if (!text) return
+    clearLiveMicSilenceTimer()
+    liveMicEditingRef.current = false
+    setLiveMicEditing(false)
+    setLiveMicEditDraft('')
+    liveMicDisplayRef.current = ''
+    liveMicFinalRef.current = ''
+    liveMicPendingInterimRef.current = false
+    liveMicLastSpeechAtRef.current = 0
+    liveMicLastVoiceAtRef.current = 0
+    setLiveTranscript('')
+    sendMyraUserMessageRef.current(text)
+  }, [clearLiveMicSilenceTimer, liveMicEditDraft])
 
   /** Heart visual only — never hold getUserMedia on Android (steals mic from SpeechRecognition). */
   const startProceduralLiveMicLevels = useCallback(() => {
@@ -2131,6 +2191,9 @@ function mapGeminiCallType(reason) {
       liveMicPendingInterimRef.current = false
       liveMicLastSpeechAtRef.current = 0
       liveMicLastVoiceAtRef.current = 0
+      liveMicEditingRef.current = false
+      setLiveMicEditing(false)
+      setLiveMicEditDraft('')
       setLiveTranscript('')
 
       try {
@@ -2163,6 +2226,9 @@ function mapGeminiCallType(reason) {
     recognition.maxAlternatives = 1
 
     recognition.onresult = (speechEvent) => {
+      // User is fixing the line — ignore new STT until they Send / Cancel edit.
+      if (liveMicEditingRef.current) return
+
       let committed = ''
       let interim = ''
       let hasInterim = false
@@ -2222,7 +2288,8 @@ function mapGeminiCallType(reason) {
       if (
         composeModeRef.current !== 'liveMic' ||
         jarvisBusyRef.current ||
-        aiSpeakingRef.current
+        aiSpeakingRef.current ||
+        liveMicEditingRef.current
       ) {
         return
       }
@@ -3608,12 +3675,53 @@ function mapGeminiCallType(reason) {
                     className="myra-live-mic-panel__transcript-wrap"
                     aria-live="polite"
                   >
-                    {liveTranscript ? (
-                      <p className="myra-live-mic-panel__text">{liveTranscript}</p>
+                    {liveMicEditing ? (
+                      <div className="myra-live-mic-edit">
+                        <textarea
+                          className="myra-live-mic-edit__input"
+                          value={liveMicEditDraft}
+                          rows={2}
+                          enterKeyHint="send"
+                          aria-label="Fix what Myra heard"
+                          onChange={(event) => setLiveMicEditDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault()
+                              sendLiveMicEdited()
+                            }
+                          }}
+                        />
+                        <div className="myra-live-mic-edit__actions">
+                          <button
+                            type="button"
+                            className="myra-live-mic-edit__btn myra-live-mic-edit__btn--ghost"
+                            onClick={cancelLiveMicEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="myra-live-mic-edit__btn myra-live-mic-edit__btn--send"
+                            onClick={sendLiveMicEdited}
+                            disabled={!liveMicEditDraft.trim()}
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                    ) : liveTranscript ? (
+                      <button
+                        type="button"
+                        className="myra-live-mic-panel__text myra-live-mic-panel__text--tappable"
+                        onClick={beginLiveMicEdit}
+                      >
+                        {liveTranscript}
+                        <span className="myra-live-mic-panel__fix-hint">Tap to fix</span>
+                      </button>
                     ) : null}
                   </div>
                   <div
-                    className={`myra-live-mic-capsule${isListening ? ' myra-live-mic-capsule--active' : ''}`}
+                    className={`myra-live-mic-capsule${isListening && !liveMicEditing ? ' myra-live-mic-capsule--active' : ''}`}
                     style={{
                       '--voice-energy': (
                         voiceLevels.reduce((sum, level) => sum + level, 0) / voiceLevels.length

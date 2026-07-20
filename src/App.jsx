@@ -162,34 +162,42 @@ function stripAudioTracksFromStream(stream) {
 }
 
 /**
+ * Start getUserMedia in the same synchronous turn as the tap (iOS Chrome requires this).
+ * Do not await anything before calling this.
+ */
+function beginCameraFromUserGesture() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return Promise.reject(new Error('Camera API not available'))
+  }
+  return navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+}
+
+/**
  * iPhone Chrome/Edge/Firefox: combined video+audio getUserMedia often fails even when
  * camera alone would work. Camera is required to enter AR; mic is best-effort (live mic
  * re-asks later). Safari keeps the one-shot combined prompt.
  */
-async function acquireStartupStream() {
+async function acquireStartupStream(prefetchedStreamPromise = null) {
+  if (prefetchedStreamPromise) {
+    try {
+      return await prefetchedStreamPromise
+    } catch {
+      // Prefetch failed (gesture lost / denied) — fall through to retries.
+    }
+  }
+
   const chromeLike = isIOSChromeLike()
 
   if (chromeLike) {
     let lastError = null
     const cameraAttempts = [
+      { video: true, audio: false },
       { video: { facingMode: { ideal: 'environment' } }, audio: false },
       { video: { facingMode: { ideal: 'user' } }, audio: false },
-      { video: true, audio: false },
     ]
     for (const constraints of cameraAttempts) {
       try {
-        const videoStream = await navigator.mediaDevices.getUserMedia(constraints)
-        // Warm mic permission without blocking AR entry if mic is denied.
-        try {
-          const micStream = await navigator.mediaDevices.getUserMedia({
-            audio: STARTUP_AUDIO_CONSTRAINTS,
-            video: false,
-          })
-          micStream.getTracks().forEach((track) => track.stop())
-        } catch (micError) {
-          console.warn('[Axerai] iOS Chrome: camera OK, mic later:', micError?.name || micError)
-        }
-        return videoStream
+        return await navigator.mediaDevices.getUserMedia(constraints)
       } catch (error) {
         lastError = error
       }
@@ -207,7 +215,6 @@ async function acquireStartupStream() {
       audio: STARTUP_AUDIO_CONSTRAINTS,
     },
     { video: true, audio: STARTUP_AUDIO_CONSTRAINTS },
-    // Last resort: camera-only (mic can be granted when live chat starts).
     { video: { facingMode: { ideal: 'environment' } }, audio: false },
     { video: true, audio: false },
   ]
@@ -266,29 +273,27 @@ function isMediaNotAllowed(error) {
   return name === 'NotAllowedError' || name === 'PermissionDeniedError'
 }
 
-function permissionAccessHint(states, fromUserGesture, error = null) {
+function permissionAccessHint(states, fromUserGesture, error = null, failCount = 0) {
   const chromeLike = isIOSChromeLike()
-  const osDenied =
-    states.camera === 'denied' ||
-    states.microphone === 'denied' ||
-    (fromUserGesture && isMediaNotAllowed(error))
+  const hardDenied = states.camera === 'denied' || states.microphone === 'denied'
+  // iOS often throws NotAllowedError when the gesture was lost — not a real OS block.
+  const maybeBlocked = hardDenied || (failCount >= 2 && isMediaNotAllowed(error))
 
-  if (osDenied && chromeLike) {
-    return 'Camera blocked for Chrome — open iPhone Settings → Chrome → Camera (and Microphone) → Allow, then tap here again.'
+  if (maybeBlocked && chromeLike) {
+    return 'Allow camera in iPhone Settings, Chrome, then Camera. Come back and tap again.'
   }
-  if (osDenied) {
-    return 'Camera or mic blocked — allow in browser site settings (lock icon in address bar), then tap again.'
+  if (maybeBlocked) {
+    return 'Camera blocked in site settings. Allow it, then tap again.'
   }
-  if (chromeLike && fromUserGesture) {
-    return 'Tap again and press Allow. If no popup appears: Settings → Chrome → Camera → Allow.'
+  if (chromeLike) {
+    return fromUserGesture
+      ? 'Tap the circle and press Allow for Camera.'
+      : 'Tap the circle to allow Camera.'
   }
   if (fromUserGesture) {
     return 'Tap again and press Allow when the browser asks.'
   }
-  if (chromeLike) {
-    return 'Tap the circle to allow camera (required for AR).'
-  }
-  return 'Tap anywhere to allow camera, mic & location.'
+  return 'Tap the circle to allow camera and mic.'
 }
 
 async function applyTrackZoom(track, factor) {
@@ -420,8 +425,6 @@ function IntroLoadingScreen({
       role="status"
       aria-live="polite"
       aria-label="Loading Richera experience"
-      onTouchStart={() => unlockMobileSpeechAudio({ force: true, speechPing: true })}
-      onClick={() => unlockMobileSpeechAudio({ force: true, speechPing: true })}
     >
       <div className="intro-loading__stage">
         <img src={INTRO_LOADING_BG} alt="" className="intro-loading__bg" aria-hidden />
@@ -447,15 +450,15 @@ function IntroLoadingScreen({
             <button
               type="button"
               className={`intro-access-tap${startupAccess === 'denied' || startupAccess === 'blocked' ? ' intro-access-tap--retry' : ''}`}
-              aria-label="Allow camera, microphone, and location"
+              aria-label="Allow camera"
               disabled={startupAccess === 'granting'}
               onPointerDown={(event) => {
-                // iOS Chrome: start permission from pointerdown so the user-gesture
-                // window is not lost (click alone is flaky after async preload).
+                // Must call getUserMedia in this same turn — before any audio unlock.
                 if (event.pointerType === 'mouse' && event.button !== 0) return
                 if (startupAccess === 'granting') return
-                unlockMobileSpeechAudio({ force: true, speechPing: true })
-                onGrantAccess()
+                event.preventDefault()
+                const streamPromise = beginCameraFromUserGesture()
+                onGrantAccess(streamPromise)
               }}
             />
           </>
@@ -1035,6 +1038,7 @@ function App() {
   const assetsReadyRef = useRef(false)
   const autoAccessAttemptedRef = useRef(false)
   const startupGrantInFlightRef = useRef(false)
+  const startupGrantFailCountRef = useRef(0)
   const liveMicRecognitionRef = useRef(null)
   const liveMicAnalyserRef = useRef(null)
   const liveMicAudioCtxRef = useRef(null)
@@ -1110,15 +1114,28 @@ function App() {
     return all.filter((device) => device.kind === 'videoinput')
   }, [])
 
-  const grantStartupAccess = useCallback(async () => {
+  const grantStartupAccess = useCallback(async (prefetchedStreamPromise = null) => {
+    // Camera FIRST — never unlock audio / geo before getUserMedia on iOS Chrome.
+    const stream = await acquireStartupStream(prefetchedStreamPromise)
+    stripAudioTracksFromStream(stream)
+    streamRef.current = stream
+
     requestGeolocationInBackground()
-    // Never block camera on audio unlock — iOS/Android play() can hang.
     void ensureMobileAudioUnlocked({ force: true })
     unlockMobileSpeechAudio({ force: true, speechPing: true })
 
-    const stream = await acquireStartupStream()
-    stripAudioTracksFromStream(stream)
-    streamRef.current = stream
+    // Best-effort mic warm-up after camera (does not block AR entry).
+    if (isIOSChromeLike()) {
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({
+          audio: STARTUP_AUDIO_CONSTRAINTS,
+          video: false,
+        })
+        micStream.getTracks().forEach((track) => track.stop())
+      } catch (micError) {
+        console.warn('[Axerai] iOS Chrome: camera OK, mic later:', micError?.name || micError)
+      }
+    }
 
     const videoInputs = await loadDevices()
     const backId = pickBackCameraId(videoInputs)
@@ -1131,6 +1148,7 @@ function App() {
     }
 
     startupPermissionsDoneRef.current = true
+    startupGrantFailCountRef.current = 0
     setCameraError(null)
     setCameraInitReady(true)
     return true
@@ -1147,7 +1165,7 @@ function App() {
   }, [beginIntroExit])
 
   const requestStartupPermissions = useCallback(
-    async ({ fromUserGesture = false } = {}) => {
+    async ({ fromUserGesture = false, prefetchedStreamPromise = null } = {}) => {
       if (startupPermissionsDoneRef.current) {
         maybeEnterExperience()
         return true
@@ -1158,17 +1176,17 @@ function App() {
       setStartupAccess('granting')
       setStartupAccessHint(null)
       try {
-        await grantStartupAccess()
+        await grantStartupAccess(prefetchedStreamPromise)
         setStartupAccess('ready')
         setStartupAccessHint(null)
         maybeEnterExperience()
         return true
       } catch (error) {
+        if (fromUserGesture) startupGrantFailCountRef.current += 1
+        const failCount = startupGrantFailCountRef.current
         const states = await inspectPermissionStates()
-        const blocked =
-          states.camera === 'denied' ||
-          states.microphone === 'denied' ||
-          (fromUserGesture && isMediaNotAllowed(error) && isIOSChromeLike())
+        const hardDenied = states.camera === 'denied' || states.microphone === 'denied'
+        const blocked = hardDenied || (fromUserGesture && failCount >= 2 && isMediaNotAllowed(error))
         if (blocked) {
           setStartupAccess('blocked')
         } else if (fromUserGesture) {
@@ -1176,7 +1194,7 @@ function App() {
         } else {
           setStartupAccess('prompt')
         }
-        setStartupAccessHint(permissionAccessHint(states, fromUserGesture, error))
+        setStartupAccessHint(permissionAccessHint(states, fromUserGesture, error, failCount))
         if (fromUserGesture || blocked) {
           console.warn('[Axerai] Startup permissions failed:', error)
         } else {
@@ -1234,11 +1252,11 @@ function App() {
     maybeEnterExperience()
   }, [handleAutoRequestAccess, maybeEnterExperience])
 
-  const handleGrantAccess = useCallback(async () => {
-    // Prime audio inside the same gesture, then request camera immediately.
-    unlockMobileSpeechAudio({ force: true, speechPing: true })
-    void ensureMobileAudioUnlocked({ force: true })
-    await requestStartupPermissions({ fromUserGesture: true })
+  const handleGrantAccess = useCallback(async (prefetchedStreamPromise = null) => {
+    await requestStartupPermissions({
+      fromUserGesture: true,
+      prefetchedStreamPromise,
+    })
   }, [requestStartupPermissions])
 
   // --- GEMINI MYRA AI LOGIC ---

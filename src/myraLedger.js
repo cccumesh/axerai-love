@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from './supabaseClient.js'
 import { isOfflineMyraFallback } from './myraErrorFallback.js'
-import { parseBrandProductPraise, summarizeSessionDialogue, buildLocalStorySummary, extractStoryFromSummary } from './myraSummarize.js'
+import { parseBrandProductPraise, summarizeSessionDialogue, buildLocalStorySummary, extractStoryFromSummary, extractFactsFromSummary, mergeKnownFacts, formatKnownFactsBlock, isFactKnown, inferFactsFromText } from './myraSummarize.js'
 
 /** Offline Myra lines (myraErrorFallback.js) are never appended — only live Gemini text. */
 
@@ -126,11 +126,11 @@ function buildBackendScanSignal(mode) {
     case 'SENDER_FIRST':
       return 'Axerai backend: gift-giver first scan. STEP A boot. Then memories for recipient — love, story, her personality, sender life. Rule 22: rich story = stay in flow. Gap probe only when thin.'
     case 'SENDER_RETURN':
-      return 'Axerai backend: SENDER return scan. Gayab tease first. Continue ONLY from real facts in sender PAST session STORY summaries. Never invent name/story/occasion. One beat only — do not dump the whole story. No boot intro.'
+      return 'Axerai backend: SENDER return scan. Gayab tease first. Read KNOWN FACTS — never re-ask known name/gift-for/occasion. Continue ONE next missing beat only. No boot intro.'
     case 'RECEIVER_FIRST':
-      return 'Axerai backend: RECEIVER first scan. Read sender PAST STORY summaries (gift story) + receiver CURRENT SESSION in AXERAI LEDGER. One beat at a time.'
+      return 'Axerai backend: RECEIVER first scan. Read sender KNOWN FACTS + PAST STORY (gift story) + receiver CURRENT SESSION in AXERAI LEDGER. One beat at a time.'
     case 'RECEIVER_RETURN':
-      return 'Axerai backend: RECEIVER return scan. Gayab tease first. Only real ledger STORY facts — never invent. One beat only. No boot intro.'
+      return 'Axerai backend: RECEIVER return scan. Gayab tease first. Only real KNOWN FACTS / STORY — never invent or re-ask known facts. One beat only. No boot intro.'
     default:
       return ''
   }
@@ -503,6 +503,16 @@ function buildCompactThreadBlock(label, thread) {
   const lines = [
     `${label} (device ${String(thread.device_id ?? '').slice(0, 8)}…, scans: ${thread.scan_count ?? 0}):`,
   ]
+
+  const factsFromSummaries = summaryEntries.map((entry) => extractFactsFromSummary(entry.summary))
+  const factsFromCurrent = currentDialogue
+    ? [...currentDialogue.matchAll(/^(?:sender|receiver):\s*(.+)$/gim)].map((m) =>
+        inferFactsFromText(m[1]),
+      )
+    : []
+  const lockedFacts = mergeKnownFacts([...factsFromSummaries, ...factsFromCurrent])
+  lines.push('')
+  lines.push(formatKnownFactsBlock(lockedFacts))
 
   if (summaryEntries.length) {
     lines.push('')

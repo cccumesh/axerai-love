@@ -19,19 +19,26 @@ REQUIRED FORMAT (exact headers, this order):
 
 THREAD: Sender | Receiver
 
+FACTS:
+Locked fields for future scans. Use unknown if not clearly in THIS scan's log. Never invent.
+- sender_name: <name or unknown>
+- gift_for: <who the gift is for — e.g. sister/behen, girlfriend name, or unknown>
+- occasion: <birthday / none / aise hi / unknown>
+- product: <bracelet / card / packaging note or unknown>
+
 STORY:
 Write 4–8 short sentences as a narrative of what happened this scan.
-Style example: "Sender Chetan. Gift for his sister Nayna on her birthday. Chetan said Nayna is very sweet and loves Naruto. Myra asked what else she likes..."
 Rules:
 - ONLY facts clearly present in the log. Do NOT invent names, relationships, gifts, occasions, or preferences.
 - Prefer user (sender:/receiver:) facts as the spine of the story.
 - Mention Myra only lightly (e.g. what she asked next) — do not paste full Myra monologues.
 - If the user only said hello / almost nothing: write a thin honest story (e.g. "Sender just arrived; name not shared yet.").
 - Keep it readable for a future Myra session — memory, not a chat replay.
-- Do NOT dump every line. Do NOT add EMOTIONS / FACTS / OPEN THREADS sections.
+- Do NOT dump every line.
 
 OPEN HOOK:
 - One short line: the last unresolved question Myra asked (verbatim if present), OR "none".
+- If FACTS already answered that question (e.g. gift_for known), OPEN HOOK must NOT repeat "kiske liye" — use the next open ask or "none".
 
 BRAND PRODUCT PRAISE:
 - yes ONLY if user praised the physical product: RICHERA card, bracelet, box, packaging, gift design.
@@ -104,6 +111,126 @@ export function condenseMyraLineForSummary(text, { isLast = false } = {}) {
 }
 
 /**
+ * Infer locked facts from raw user/story text — no invention beyond clear matches.
+ */
+export function inferFactsFromText(text) {
+  const t = String(text ?? '')
+  const lower = t.toLowerCase()
+  const facts = {
+    sender_name: 'unknown',
+    gift_for: 'unknown',
+    occasion: 'unknown',
+    product: 'unknown',
+  }
+
+  const nameMatch =
+    t.match(/\b(?:naam|name)\s+(?:hai\s+)?([A-Z][a-zA-Z]{1,20})\b/) ||
+    t.match(/\b(?:main|mein|me)\s+([A-Z][a-zA-Z]{1,20})\s+(?:hoon|hun|hu)\b/i) ||
+    t.match(/\b([A-Z][a-z]{2,20})\b(?=.*\b(?:naam|chetan|serious|solid)\b)/i)
+  // Prefer clear single-token sender names from short lines
+  const soloName = t.match(/^(?:sender:\s*)?([A-Za-z]{3,20})$/m)
+  if (soloName?.[1] && !/^(haan|okay|theek|achha|yes|no|nahi)$/i.test(soloName[1])) {
+    facts.sender_name = soloName[1]
+  } else if (nameMatch?.[1]) {
+    facts.sender_name = nameMatch[1]
+  }
+  if (/\bchetan\b/i.test(t)) facts.sender_name = 'Chetan'
+
+  if (/\b(behen|bahan|sister)\b/i.test(lower)) facts.gift_for = 'sister (behen)'
+  else if (/\b(bhai|brother)\b/i.test(lower)) facts.gift_for = 'brother (bhai)'
+  else if (/\b(girlfriend|gf|boyfriend|bf|wife|pati|patni|mummy|mama|papa|mom|dad)\b/i.test(lower)) {
+    const rel = lower.match(/\b(girlfriend|gf|boyfriend|bf|wife|pati|patni|mummy|mama|papa|mom|dad)\b/i)
+    if (rel) facts.gift_for = rel[1]
+  } else if (/\b(?:uske|unki|uska)\s+liye\b/i.test(lower) && /\b([A-Z][a-z]{2,20})\b/.test(t)) {
+    const person = t.match(/\b([A-Z][a-z]{2,20})\b/)
+    if (person && !/^(Chetan|Myra|Richera)$/i.test(person[1])) facts.gift_for = person[1]
+  }
+
+  if (/\b(aise hi|bina\s+(kisi\s+)?occasion|no occasion|kisi wajah|bina wajah)\b/i.test(lower)) {
+    facts.occasion = 'none (aise hi)'
+  } else if (/\b(birthday|janmadin|anniversary|valentine|special din)\b/i.test(lower)) {
+    const occ = lower.match(/\b(birthday|janmadin|anniversary|valentine|special din)\b/i)
+    if (occ) facts.occasion = occ[1]
+  }
+
+  if (/\bbracelet\b/i.test(lower)) facts.product = 'bracelet'
+  else if (/\b(card|richera|box|packaging)\b/i.test(lower)) {
+    const p = lower.match(/\b(card|richera|box|packaging)\b/i)
+    if (p) facts.product = p[1]
+  }
+
+  return facts
+}
+
+/** Parse FACTS block from a session summary; fall back to inferring from STORY. */
+export function extractFactsFromSummary(summaryText) {
+  const text = String(summaryText ?? '').trim()
+  const facts = {
+    sender_name: 'unknown',
+    gift_for: 'unknown',
+    occasion: 'unknown',
+    product: 'unknown',
+  }
+  if (!text) return facts
+
+  const block = text.match(
+    /FACTS:\s*\n([\s\S]*?)(?=\n\s*STORY:|\n\s*OPEN HOOK:|\n\s*BRAND PRODUCT PRAISE:|$)/i,
+  )
+  if (block?.[1]) {
+    const body = block[1]
+    const pick = (key) => {
+      const re = new RegExp(`[-•]?\\s*${key}\\s*:\\s*(.+)`, 'i')
+      const m = body.match(re)
+      return m?.[1]?.trim().replace(/^unknown$/i, 'unknown') || 'unknown'
+    }
+    facts.sender_name = pick('sender_name')
+    facts.gift_for = pick('gift_for')
+    facts.occasion = pick('occasion')
+    facts.product = pick('product')
+  }
+
+  const inferred = inferFactsFromText(text)
+  for (const key of Object.keys(facts)) {
+    if (!facts[key] || facts[key] === 'unknown') facts[key] = inferred[key]
+  }
+  return facts
+}
+
+/** Later non-unknown values win. */
+export function mergeKnownFacts(list = []) {
+  const merged = {
+    sender_name: 'unknown',
+    gift_for: 'unknown',
+    occasion: 'unknown',
+    product: 'unknown',
+  }
+  for (const item of list) {
+    if (!item) continue
+    for (const key of Object.keys(merged)) {
+      const value = String(item[key] ?? '').trim()
+      if (value && value.toLowerCase() !== 'unknown') merged[key] = value
+    }
+  }
+  return merged
+}
+
+export function formatKnownFactsBlock(facts) {
+  const f = facts || {}
+  return [
+    'KNOWN FACTS (LOCKED — already told by user; NEVER re-ask these):',
+    `- sender_name: ${f.sender_name || 'unknown'}`,
+    `- gift_for: ${f.gift_for || 'unknown'}`,
+    `- occasion: ${f.occasion || 'unknown'}`,
+    `- product: ${f.product || 'unknown'}`,
+  ].join('\n')
+}
+
+export function isFactKnown(value) {
+  const v = String(value ?? '').trim().toLowerCase()
+  return Boolean(v) && v !== 'unknown' && v !== 'none'
+}
+
+/**
  * Local fallback story when Gemini summary is unavailable.
  * Built only from log facts — no invention.
  */
@@ -117,6 +244,7 @@ export function buildLocalStorySummary({
   const facts = userLines.map((line) => String(line ?? '').trim()).filter(Boolean)
   const lastMyra = myraLines.length ? String(myraLines[myraLines.length - 1] ?? '').trim() : ''
   const openHook = extractMyraClosingQuestion(lastMyra) || 'none'
+  const locked = mergeKnownFacts(facts.map((line) => inferFactsFromText(line)))
 
   let story
   if (!facts.length) {
@@ -134,6 +262,12 @@ export function buildLocalStorySummary({
 
   return [
     `THREAD: ${threadLabel}`,
+    '',
+    'FACTS:',
+    `- sender_name: ${locked.sender_name}`,
+    `- gift_for: ${locked.gift_for}`,
+    `- occasion: ${locked.occasion}`,
+    `- product: ${locked.product}`,
     '',
     'STORY:',
     story,
@@ -217,8 +351,9 @@ THIS SCAN CHAT LOG ONLY:
 ${log}
 
 Output THREAD: ${ctx.threadLabel}
-Then STORY (4–8 sentences, only real log facts — like "Chetan bought this for sister Nayna's birthday; she likes Naruto...").
-Then OPEN HOOK (last Myra question verbatim, or none).
+Then FACTS (sender_name, gift_for, occasion, product — unknown if not in log).
+Then STORY (4–8 sentences, only real log facts).
+Then OPEN HOOK (last Myra question verbatim, or none — do not re-ask a FACTS-known topic).
 Then BRAND PRODUCT PRAISE (product only, not GF/BF).
 ${userCount > 0 ? `${userCount} user line(s) in log.` : 'No user lines.'}
 ${myraCount > 0 ? `${myraCount} myra line(s) in log.` : 'No myra lines.'}`
@@ -261,7 +396,7 @@ export function extractStoryFromSummary(summaryText) {
   if (!text) return ''
 
   const storyMatch = text.match(
-    /STORY:\s*\n([\s\S]*?)(?=\n\s*OPEN HOOK:|\n\s*BRAND PRODUCT PRAISE:|\n\s*USER SAID:|\n\s*MYRA SAID:|$)/i,
+    /STORY:\s*\n([\s\S]*?)(?=\n\s*OPEN HOOK:|\n\s*BRAND PRODUCT PRAISE:|\n\s*FACTS:|\n\s*USER SAID:|\n\s*MYRA SAID:|$)/i,
   )
   if (storyMatch?.[1]?.trim()) return storyMatch[1].trim()
 

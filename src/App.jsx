@@ -120,8 +120,62 @@ const LIVE_MIC_VOICE_ENERGY = 20
 const MYRA_TTS_SAFETY_MS = 35000
 
 function pickBackCameraId(devices) {
-  const back = devices.find((device) => /back|rear|environment|wide/i.test(device.label))
-  return back?.deviceId ?? ''
+  const videos = devices.filter((device) => device.kind === 'videoinput')
+  const back = videos.find(
+    (device) =>
+      /back|rear|environment/i.test(device.label) && !/front|user|face/i.test(device.label),
+  )
+  if (back) return back.deviceId
+  const wide = videos.find(
+    (device) => /wide|ultra|triple|dual/i.test(device.label) && !/front|user|face/i.test(device.label),
+  )
+  return wide?.deviceId ?? ''
+}
+
+function trackLooksLikeBackCamera(track) {
+  if (!track) return false
+  const facing = track.getSettings?.()?.facingMode
+  if (facing === 'environment') return true
+  if (facing === 'user') return false
+  const label = track.label || ''
+  return /back|rear|environment/i.test(label) && !/front|user|face/i.test(label)
+}
+
+/** After permission, switch front → back for AR scan (iPhone Chrome often opens selfie first). */
+async function preferBackCameraStream(initialStream) {
+  if (!(initialStream instanceof MediaStream)) return initialStream
+  const track = initialStream.getVideoTracks()[0] ?? null
+  if (trackLooksLikeBackCamera(track)) {
+    return initialStream
+  }
+
+  const attempts = [
+    { video: { facingMode: { exact: 'environment' } }, audio: false },
+    { video: { facingMode: { ideal: 'environment' } }, audio: false },
+  ]
+
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  const backId = pickBackCameraId(devices)
+  if (backId) {
+    attempts.unshift({ video: { deviceId: { exact: backId } }, audio: false })
+  }
+
+  for (const constraints of attempts) {
+    try {
+      const backStream = await navigator.mediaDevices.getUserMedia(constraints)
+      const backTrack = backStream.getVideoTracks()[0]
+      if (!trackLooksLikeBackCamera(backTrack) && backTrack?.getSettings?.()?.facingMode === 'user') {
+        backStream.getTracks().forEach((t) => t.stop())
+        continue
+      }
+      initialStream.getTracks().forEach((t) => t.stop())
+      return backStream
+    } catch {
+      // try next
+    }
+  }
+
+  return initialStream
 }
 
 async function acquireCameraStream(selectedDeviceId, cameraFacing) {
@@ -130,11 +184,17 @@ async function acquireCameraStream(selectedDeviceId, cameraFacing) {
   if (selectedDeviceId) {
     attempts.push({ video: { deviceId: { exact: selectedDeviceId } }, audio: false })
   }
-  attempts.push({ video: { facingMode: { ideal: cameraFacing } }, audio: false })
   if (cameraFacing === 'environment') {
-    attempts.push({ video: { facingMode: { ideal: 'user' } }, audio: false })
+    attempts.push({ video: { facingMode: { exact: 'environment' } }, audio: false })
   }
-  attempts.push({ video: true, audio: false })
+  attempts.push({ video: { facingMode: { ideal: cameraFacing } }, audio: false })
+  // Only fall back to the other side when explicitly flipping / last resort.
+  if (cameraFacing === 'environment') {
+    attempts.push({ video: true, audio: false })
+  } else {
+    attempts.push({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+    attempts.push({ video: true, audio: false })
+  }
 
   let lastError = null
   for (const constraints of attempts) {
@@ -169,7 +229,11 @@ function beginCameraFromUserGesture() {
   if (!navigator.mediaDevices?.getUserMedia) {
     return Promise.reject(new Error('Camera API not available'))
   }
-  return navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+  // Prefer back camera on the gesture itself — { video: true } often opens front on iPhone Chrome.
+  return navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' } },
+    audio: false,
+  })
 }
 
 /**
@@ -191,9 +255,9 @@ async function acquireStartupStream(prefetchedStreamPromise = null) {
   if (chromeLike) {
     let lastError = null
     const cameraAttempts = [
-      { video: true, audio: false },
+      { video: { facingMode: { exact: 'environment' } }, audio: false },
       { video: { facingMode: { ideal: 'environment' } }, audio: false },
-      { video: { facingMode: { ideal: 'user' } }, audio: false },
+      { video: true, audio: false },
     ]
     for (const constraints of cameraAttempts) {
       try {
@@ -1116,7 +1180,8 @@ function App() {
 
   const grantStartupAccess = useCallback(async (prefetchedStreamPromise = null) => {
     // Camera FIRST — never unlock audio / geo before getUserMedia on iOS Chrome.
-    const stream = await acquireStartupStream(prefetchedStreamPromise)
+    let stream = await acquireStartupStream(prefetchedStreamPromise)
+    stream = await preferBackCameraStream(stream)
     stripAudioTracksFromStream(stream)
     streamRef.current = stream
 
@@ -1139,13 +1204,9 @@ function App() {
 
     const videoInputs = await loadDevices()
     const backId = pickBackCameraId(videoInputs)
-    if (backId) {
-      setSelectedDeviceId(backId)
-      setCameraFacing('environment')
-    } else {
-      setSelectedDeviceId('')
-      setCameraFacing('user')
-    }
+    // Always prefer environment for product scan — never default to front when labels are empty.
+    setCameraFacing('environment')
+    setSelectedDeviceId(backId || '')
 
     startupPermissionsDoneRef.current = true
     startupGrantFailCountRef.current = 0

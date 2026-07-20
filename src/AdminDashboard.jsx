@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   buildDashboardAnalytics,
+  buildElevenLabsUsageAnalytics,
   buildGeminiUsageAnalytics,
   fetchDashboardThreads,
   formatDashboardDuration,
@@ -138,6 +139,7 @@ export default function AdminDashboard() {
 
   const analytics = useMemo(() => buildDashboardAnalytics(threads), [threads])
   const tokenStats = useMemo(() => buildGeminiUsageAnalytics(threads), [threads])
+  const elevenStats = useMemo(() => buildElevenLabsUsageAnalytics(threads), [threads])
 
   if (DASHBOARD_REQUIRES_PASSWORD && !DASHBOARD_PASSWORD) {
     return (
@@ -236,10 +238,10 @@ export default function AdminDashboard() {
         </section>
 
         <section className="admin-dash__panel admin-dash__panel--tokens">
-          <h2 className="admin-dash__panel-title">Gemini API usage — code {code}</h2>
+          <h2 className="admin-dash__panel-title">Axerai AI tokens — code {code}</h2>
           <div className="admin-dash__token-stats">
             <article className="admin-dash__stat-card admin-dash__stat-card--token">
-              <span className="admin-dash__stat-label">Total tokens</span>
+              <span className="admin-dash__stat-label">Axerai AI tokens</span>
               <strong className="admin-dash__stat-value">
                 {formatTokenCount(tokenStats.totalTokens)}
               </strong>
@@ -271,8 +273,8 @@ export default function AdminDashboard() {
           </div>
           {tokenStats.entries.length === 0 ? (
             <p className="admin-dash__empty">
-              Abhi koi token log nahi — scan / chat / exit ke baad yahan dikhega. (Pehle Supabase me{' '}
-              <code>migrate_v5_gemini_usage.sql</code> run karo agar column missing ho.)
+              Abhi koi AI token log nahi — scan / chat / exit ke baad yahan dikhega. (Supabase me{' '}
+              <code>migrate_v6_axerai_tokens.sql</code> run karo.)
             </p>
           ) : (
             <div className="admin-dash__table-wrap">
@@ -295,6 +297,57 @@ export default function AdminDashboard() {
                       <td>{roleLabel(row.threadRole)}</td>
                       <td>{row.scan ?? '—'}</td>
                       <td>{formatTokenCount(row.totalTokens)}</td>
+                      <td className="admin-dash__muted">{row.model}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="admin-dash__panel admin-dash__panel--tokens">
+          <h2 className="admin-dash__panel-title">Axerai voice tokens — code {code}</h2>
+          <div className="admin-dash__token-stats">
+            <article className="admin-dash__stat-card admin-dash__stat-card--token admin-dash__stat-card--axerai">
+              <span className="admin-dash__stat-label">Axerai voice tokens</span>
+              <strong className="admin-dash__stat-value">
+                {formatTokenCount(elevenStats.totalCharacters)}
+              </strong>
+            </article>
+            <article className="admin-dash__stat-card">
+              <span className="admin-dash__stat-label">Voice calls</span>
+              <strong className="admin-dash__stat-value admin-dash__stat-value--small">
+                {elevenStats.callCount}
+              </strong>
+            </article>
+          </div>
+          {elevenStats.entries.length === 0 ? (
+            <p className="admin-dash__empty">
+              Abhi koi voice token log nahi — Myra jab bolegi tab yahan dikhega. (Supabase me{' '}
+              <code>migrate_v6_axerai_tokens.sql</code> run karo.)
+            </p>
+          ) : (
+            <div className="admin-dash__table-wrap">
+              <table className="admin-dash__table admin-dash__table--tokens">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>Role</th>
+                    <th>Scan</th>
+                    <th>Tokens</th>
+                    <th>Model</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...elevenStats.entries].reverse().map((row, index) => (
+                    <tr key={`${row.at}-voice-${index}`}>
+                      <td>{row.at ? new Date(row.at).toLocaleString('en-IN') : '—'}</td>
+                      <td>Voice</td>
+                      <td>{roleLabel(row.threadRole)}</td>
+                      <td>{row.scan ?? '—'}</td>
+                      <td>{formatTokenCount(row.characters)}</td>
                       <td className="admin-dash__muted">{row.model}</td>
                     </tr>
                   ))}

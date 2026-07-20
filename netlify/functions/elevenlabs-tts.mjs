@@ -66,6 +66,11 @@ export default async (request) => {
   const audio = await response.arrayBuffer()
   return new Response(audio, {
     status: 200,
-    headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' },
+    headers: {
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'no-store',
+      'X-Axerai-Characters': String(Array.from(text).length),
+      'Access-Control-Expose-Headers': 'X-Axerai-Characters',
+    },
   })
 }

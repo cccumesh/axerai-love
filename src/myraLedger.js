@@ -559,7 +559,8 @@ async function ensureThreadRows(verificationCode) {
       scan_count: 0,
       conversation: '',
       session_summaries: '',
-      gemini_usage: '',
+      axerai_ai_usage: '',
+      axerai_voice_usage: '',
     })
 
     if (error) console.warn(`[Ledger] ensureThreadRows insert ${role} failed:`, error.message)
@@ -780,7 +781,8 @@ export async function startLedgerScan(verificationCode) {
       scan_count: 1,
       conversation: '',
       session_summaries: '',
-      gemini_usage: '',
+      axerai_ai_usage: '',
+      axerai_voice_usage: '',
     })
     .select('id')
     .single()
@@ -1004,7 +1006,7 @@ export function buildGeminiMemoryText() {
   return ledgerMemoryText
 }
 
-/** Append one Gemini API usage row to the active (or matching) ledger thread. */
+/** Append one Axerai AI token usage row to the active (or matching) ledger thread. */
 export async function recordGeminiUsage({
   callType,
   model = 'unknown',
@@ -1040,57 +1042,195 @@ export async function recordGeminiUsage({
   if (!threadId) {
     const { data: row, error: lookupError } = await supabase
       .from('ledger_threads')
-      .select('id, gemini_usage')
+      .select('id, axerai_ai_usage')
       .eq('verification_code', code)
       .eq('role', roleKey)
       .maybeSingle()
 
     if (lookupError || !row?.id) {
-      logLedger('gemini usage skipped — thread row missing', { code, role: roleKey, call: callType })
+      logLedger('axerai ai usage skipped — thread row missing', { code, role: roleKey, call: callType })
       return false
     }
 
-    const previous = String(row.gemini_usage ?? '').trim()
+    const previous = String(row.axerai_ai_usage ?? '').trim()
     const next = previous ? `${previous}\n${entry}` : entry
     const { error } = await supabase
       .from('ledger_threads')
-      .update({ gemini_usage: next })
+      .update({ axerai_ai_usage: next })
       .eq('id', row.id)
 
     if (error) {
-      console.warn('[Ledger] gemini usage save failed:', error.message)
+      console.warn('[Ledger] axerai ai usage save failed:', error.message)
       return false
     }
 
-    logLedger('gemini usage saved', { call: callType, total, model, scan, code })
+    logLedger('axerai ai usage saved', { call: callType, total, model, scan, code })
     return true
   }
 
   const { data: row, error: readError } = await supabase
     .from('ledger_threads')
-    .select('gemini_usage')
+    .select('axerai_ai_usage')
     .eq('id', threadId)
     .single()
 
   if (readError) {
-    console.warn('[Ledger] gemini usage read failed:', readError.message)
+    console.warn('[Ledger] axerai ai usage read failed:', readError.message)
     return false
   }
 
-  const previous = String(row?.gemini_usage ?? '').trim()
+  const previous = String(row?.axerai_ai_usage ?? '').trim()
   const next = previous ? `${previous}\n${entry}` : entry
   const { error } = await supabase
     .from('ledger_threads')
-    .update({ gemini_usage: next })
+    .update({ axerai_ai_usage: next })
     .eq('id', threadId)
 
   if (error) {
-    console.warn('[Ledger] gemini usage save failed:', error.message)
+    console.warn('[Ledger] axerai ai usage save failed:', error.message)
     return false
   }
 
-  logLedger('gemini usage saved', { call: callType, total, model, scan, code })
+  logLedger('axerai ai usage saved', { call: callType, total, model, scan, code })
   return true
+}
+
+/** Append one Axerai voice token usage row (TTS characters) to the active ledger thread. */
+export async function recordElevenLabsUsage({
+  characters = 0,
+  model = 'eleven_v3',
+  voiceId = '',
+  callType = 'tts',
+  scanNumber = null,
+  verificationCode = null,
+}) {
+  if (!supabase) return false
+
+  const chars = Math.max(0, Math.round(Number(characters) || 0))
+  if (chars <= 0) return false
+
+  const code = String(verificationCode ?? activeVerificationCode ?? cachedVerificationCode ?? 'R').trim()
+  const roleKey = roleKeyFromSession()
+  const scan = scanNumber ?? (activeScanNumber > 0 ? activeScanNumber : null)
+
+  const entry = JSON.stringify({
+    at: new Date().toISOString(),
+    call: String(callType ?? 'tts').slice(0, 24),
+    scan,
+    model: String(model).slice(0, 80),
+    voice: String(voiceId || '').slice(0, 64),
+    chars,
+    total: chars,
+  })
+
+  let threadId = activeThreadId
+
+  if (!threadId) {
+    const { data: row, error: lookupError } = await supabase
+      .from('ledger_threads')
+      .select('id, axerai_voice_usage')
+      .eq('verification_code', code)
+      .eq('role', roleKey)
+      .maybeSingle()
+
+    if (lookupError || !row?.id) {
+      logLedger('axerai voice usage skipped — thread row missing', { code, role: roleKey, call: callType })
+      return false
+    }
+
+    const previous = String(row.axerai_voice_usage ?? '').trim()
+    const next = previous ? `${previous}\n${entry}` : entry
+    const { error } = await supabase
+      .from('ledger_threads')
+      .update({ axerai_voice_usage: next })
+      .eq('id', row.id)
+
+    if (error) {
+      console.warn('[Ledger] axerai voice usage save failed:', error.message)
+      return false
+    }
+
+    logLedger('axerai voice usage saved', { call: callType, chars, model, scan, code })
+    return true
+  }
+
+  const { data: row, error: readError } = await supabase
+    .from('ledger_threads')
+    .select('axerai_voice_usage')
+    .eq('id', threadId)
+    .single()
+
+  if (readError) {
+    console.warn('[Ledger] axerai voice usage read failed:', readError.message)
+    return false
+  }
+
+  const previous = String(row?.axerai_voice_usage ?? '').trim()
+  const next = previous ? `${previous}\n${entry}` : entry
+  const { error } = await supabase
+    .from('ledger_threads')
+    .update({ axerai_voice_usage: next })
+    .eq('id', threadId)
+
+  if (error) {
+    console.warn('[Ledger] axerai voice usage save failed:', error.message)
+    return false
+  }
+
+  logLedger('axerai voice usage saved', { call: callType, chars, model, scan, code })
+  return true
+}
+
+export function parseElevenLabsUsageEntries(elevenUsageText) {
+  const lines = String(elevenUsageText ?? '')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+  const entries = []
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line)
+      const chars = Number(parsed.chars ?? parsed.total ?? 0) || 0
+      entries.push({
+        at: parsed.at ?? '',
+        call: parsed.call ?? 'tts',
+        scan: parsed.scan ?? null,
+        model: parsed.model ?? 'eleven_v3',
+        voice: parsed.voice ?? '',
+        characters: chars,
+        totalTokens: chars,
+        threadRole: parsed.threadRole ?? null,
+      })
+    } catch {
+      // skip malformed lines
+    }
+  }
+
+  return entries
+}
+
+/** Sum Axerai voice tokens across sender + receiver threads for dashboard. */
+export function buildElevenLabsUsageAnalytics(threads = []) {
+  const entries = []
+  let totalCharacters = 0
+
+  for (const thread of threads) {
+    for (const entry of parseElevenLabsUsageEntries(thread.axerai_voice_usage)) {
+      const row = { ...entry, threadRole: thread.role }
+      entries.push(row)
+      totalCharacters += entry.characters
+    }
+  }
+
+  entries.sort((a, b) => Date.parse(a.at || '') - Date.parse(b.at || ''))
+
+  return {
+    totalCharacters,
+    totalTokens: totalCharacters,
+    entries,
+    callCount: entries.length,
+  }
 }
 
 export function parseGeminiUsageEntries(geminiUsageText) {
@@ -1121,7 +1261,7 @@ export function parseGeminiUsageEntries(geminiUsageText) {
   return entries
 }
 
-/** Sum Gemini tokens across sender + receiver threads for dashboard. */
+/** Sum Axerai AI tokens across sender + receiver threads for dashboard. */
 export function buildGeminiUsageAnalytics(threads = []) {
   const entries = []
   let totalTokens = 0
@@ -1136,7 +1276,7 @@ export function buildGeminiUsageAnalytics(threads = []) {
   }
 
   for (const thread of threads) {
-    for (const entry of parseGeminiUsageEntries(thread.gemini_usage)) {
+    for (const entry of parseGeminiUsageEntries(thread.axerai_ai_usage)) {
       const row = { ...entry, threadRole: thread.role }
       entries.push(row)
       totalTokens += entry.totalTokens
@@ -1167,7 +1307,7 @@ export async function fetchDashboardThreads(verificationCode = 'R') {
   const { data, error } = await supabase
     .from('ledger_threads')
     .select(
-      'id, verification_code, device_id, role, scan_count, conversation, session_summaries, gemini_usage',
+      'id, verification_code, device_id, role, scan_count, conversation, session_summaries, axerai_ai_usage, axerai_voice_usage',
     )
     .eq('verification_code', verificationCode)
     .order('role', { ascending: true })

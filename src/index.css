@@ -2245,6 +2245,17 @@ body {
   margin-bottom: 0;
 }
 
+.admin-dash__panel-note {
+  margin: -0.35rem 0 0.85rem;
+  font-size: 0.82rem;
+  color: rgba(255, 244, 220, 0.58);
+}
+
+.admin-dash__stat-card--axerai {
+  border-color: rgba(245, 215, 142, 0.45);
+  background: linear-gradient(145deg, rgba(48, 38, 18, 0.7), rgba(36, 28, 22, 0.5));
+}
+
 .admin-dash__table--tokens td:last-child {
   font-size: 0.72rem;
   max-width: 10rem;

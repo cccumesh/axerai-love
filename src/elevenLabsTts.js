@@ -1,6 +1,7 @@
 import { connectTtsAudio, disconnectTtsAudio, startSpeechLipSync } from './myraLipSync.js'
 import { USE_API_PROXY, requestElevenLabsViaProxy } from './apiProxy.js'
 import { isAppleMobileBrowser } from './mobileBrowser.js'
+import { recordElevenLabsUsage } from './myraLedger.js'
 
 const ELEVENLABS_API_KEY = String(import.meta.env.VITE_ELEVENLABS_API_KEY ?? '').trim()
 const ELEVENLABS_VOICE_ID = String(import.meta.env.VITE_ELEVENLABS_VOICE_ID ?? '').trim()
@@ -1084,6 +1085,10 @@ export async function logElevenLabsConnectionOnce() {
   }
 }
 
+function countElevenLabsCharacters(text) {
+  return Array.from(String(text ?? '').trim()).length
+}
+
 export async function speakWithElevenLabs(
   text,
   { onStart, onEnd, onError, requireUserGesture = false } = {},
@@ -1153,12 +1158,21 @@ export async function speakWithElevenLabs(
 
       cachedWorkingVoiceId = voiceId
       const voiceName = cachedVoiceNames.get(voiceId) || voiceId
+      const billedChars = Number(response.headers.get('X-Axerai-Characters') || 0)
       const blob = await response.blob()
       if (controller.signal.aborted) return
       if (!blob?.size) {
         lastError = 'ElevenLabs returned empty audio'
         continue
       }
+
+      // Billable characters — log once audio is confirmed (even if Meet Myra defers play).
+      void recordElevenLabsUsage({
+        characters: billedChars > 0 ? billedChars : countElevenLabsCharacters(trimmed),
+        model: ELEVENLABS_MODEL,
+        voiceId: voiceId || '',
+        callType: 'tts',
+      })
 
       console.log(
         `[ElevenLabs] ${needsGesture ? 'Queued for tap' : 'Playing'}: ${voiceName} (${voiceId})`,

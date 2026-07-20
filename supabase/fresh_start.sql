@@ -40,8 +40,11 @@ create table public.ledger_threads (
   -- Har exit scan ka Gemini summary (USER SAID + MYRA SAID + brand praise)
   session_summaries text not null default '',
 
-  -- Har Gemini API call ka token log (JSON lines, one per line)
-  gemini_usage text not null default '',
+  -- Axerai AI tokens (JSON lines, one per AI call)
+  axerai_ai_usage text not null default '',
+
+  -- Axerai voice tokens (JSON lines, one per TTS call — character count)
+  axerai_voice_usage text not null default '',
 
   -- Ek code pe sirf ek sender + ek receiver row
   unique (verification_code, role)
@@ -56,7 +59,8 @@ comment on column public.ledger_threads.role is 'sender or receiver thread for t
 comment on column public.ledger_threads.scan_count is 'Total completed scans on this thread.';
 comment on column public.ledger_threads.conversation is 'Full chat log with session markers.';
 comment on column public.ledger_threads.session_summaries is 'Exit summaries appended per scan.';
-comment on column public.ledger_threads.gemini_usage is 'Token usage JSON lines per Gemini call.';
+comment on column public.ledger_threads.axerai_ai_usage is 'Axerai AI tokens — JSON lines per AI call.';
+comment on column public.ledger_threads.axerai_voice_usage is 'Axerai voice tokens — JSON lines per TTS character usage.';
 
 -- Fast lookup by product code (dashboard + app prefetch)
 create index idx_ledger_threads_code on public.ledger_threads (verification_code);
@@ -99,11 +103,12 @@ insert into public.ledger_threads (
   scan_count,
   conversation,
   session_summaries,
-  gemini_usage
+  axerai_ai_usage,
+  axerai_voice_usage
 )
 values
-  ('R', '', 'sender', 0, '', '', ''),
-  ('R', '', 'receiver', 0, '', '', '');
+  ('R', '', 'sender', 0, '', '', '', ''),
+  ('R', '', 'receiver', 0, '', '', '', '');
 
 -- Done. Verify:
 -- select verification_code, role, scan_count from public.ledger_threads order by role;

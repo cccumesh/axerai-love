@@ -11,7 +11,7 @@ import {
 import { Euler, Quaternion } from 'three'
 import { getMyraMouthLevel } from './myraLipSync.js'
 
-export const MYRA_MODEL_PATH = '/models/sejal.fbx'
+export const MYRA_MODEL_PATH = '/models/myra2.fbx'
 
 const MODEL_PATH = MYRA_MODEL_PATH
 const IDLE_PATH = '/models/idle.fbx'
@@ -22,7 +22,7 @@ let myraAssetCache = null
 
 const DEG = Math.PI / 180
 
-/** Idle + talk standing spot — tune after placing sejal in AR */
+/** Idle + talk standing spot — same Mixamo bone layout as previous sejal. */
 export const IDLE_PLACEMENT = {
   position: { x: 0, y: -0.35, z: -0.15 },
   rotation: { x: 0, y: 0, z: 0 },
@@ -33,7 +33,16 @@ export const MYRA_PLACEMENT = IDLE_PLACEMENT
 
 const CROSSFADE_SEC = 0.35
 const HIPS_RE = /mixamorig:?Hips$/i
-const MOUTH_KEY_PATTERNS = [/mouth/i, /open/i, /jaw/i, /lip/i, /morph/i, /shape/i, /^key$/i, /^key\s*1$/i]
+/** Prefer exact Blender key "mouth open" (0=closed, 1=open), then loose matches. */
+const MOUTH_KEY_PATTERNS = [
+  /^mouth\s*open$/i,
+  /^mouthopen$/i,
+  /^mouth_open$/i,
+  /mouth\s*open/i,
+  /mouth/i,
+  /jaw/i,
+  /lip/i,
+]
 const HEAD_LIP_BONES = [/mixamorig:?Head$/i]
 
 function findSkinnedMesh(root) {
@@ -241,6 +250,10 @@ function registerMorphTargets(anchorGroup, character) {
     console.info('[Myra] Lip sync morph targets:', morphMeshes.map(({ mesh, index }) => ({
       mesh: mesh.name,
       index,
+      key:
+        index >= 0 && mesh.morphTargetDictionary
+          ? Object.entries(mesh.morphTargetDictionary).find(([, i]) => i === index)?.[0]
+          : null,
       dictionary: mesh.morphTargetDictionary,
     })))
   }

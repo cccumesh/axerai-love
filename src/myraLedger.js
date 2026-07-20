@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from './supabaseClient.js'
 import { isOfflineMyraFallback } from './myraErrorFallback.js'
-import { parseBrandProductPraise, summarizeSessionDialogue, condenseMyraLineForSummary } from './myraSummarize.js'
+import { parseBrandProductPraise, summarizeSessionDialogue, buildLocalStorySummary, extractStoryFromSummary } from './myraSummarize.js'
 
 /** Offline Myra lines (myraErrorFallback.js) are never appended — only live Gemini text. */
 
@@ -126,11 +126,11 @@ function buildBackendScanSignal(mode) {
     case 'SENDER_FIRST':
       return 'Axerai backend: gift-giver first scan. STEP A boot. Then memories for recipient — love, story, her personality, sender life. Rule 22: rich story = stay in flow. Gap probe only when thin.'
     case 'SENDER_RETURN':
-      return 'Axerai backend: SENDER return scan. Gayab tease first. Continue ONLY from real USER SAID facts in sender PAST summaries. Never invent name/story/occasion. No boot intro.'
+      return 'Axerai backend: SENDER return scan. Gayab tease first. Continue ONLY from real facts in sender PAST session STORY summaries. Never invent name/story/occasion. One beat only — do not dump the whole story. No boot intro.'
     case 'RECEIVER_FIRST':
-      return 'Axerai backend: RECEIVER first scan. Read sender PAST summaries (gift story) + receiver CURRENT SESSION in AXERAI LEDGER.'
+      return 'Axerai backend: RECEIVER first scan. Read sender PAST STORY summaries (gift story) + receiver CURRENT SESSION in AXERAI LEDGER. One beat at a time.'
     case 'RECEIVER_RETURN':
-      return 'Axerai backend: RECEIVER return scan. Gayab tease first. Only real ledger facts — never invent. No boot intro.'
+      return 'Axerai backend: RECEIVER return scan. Gayab tease first. Only real ledger STORY facts — never invent. One beat only. No boot intro.'
     default:
       return ''
   }
@@ -305,33 +305,11 @@ function buildSummaryFromConversation(conversation, roleKey = 'sender', sessionD
   )
   const lines = parseConversationLines(sessionOnly)
   const userSpeaker = roleKey === 'receiver' ? 'receiver' : 'sender'
-  const threadLabel = roleKey === 'receiver' ? 'Receiver' : 'Sender'
-  const userLines = lines.filter((line) => line.speaker === userSpeaker)
-  const myraLines = lines.filter((line) => line.speaker === 'myra')
-
-  const parts = [
-    `THREAD: ${threadLabel}`,
-    '',
-    'USER SAID:',
-    userLines.length
-      ? userLines.map((line) => `${line.speaker}: ${line.text}`).join('\n')
-      : '(no user messages this scan)',
-    '',
-    'MYRA SAID:',
-    myraLines.length
-      ? myraLines
-          .map((line, index) =>
-            condenseMyraLineForSummary(line.text, { isLast: index === myraLines.length - 1 }),
-          )
-          .join('\n')
-      : '(no Myra replies this scan)',
-    '',
-    'BRAND PRODUCT PRAISE:',
-    'none',
-  ]
+  const userLines = lines.filter((line) => line.speaker === userSpeaker).map((line) => line.text)
+  const myraLines = lines.filter((line) => line.speaker === 'myra').map((line) => line.text)
 
   return {
-    summary: parts.join('\n'),
+    summary: buildLocalStorySummary({ roleKey, userLines, myraLines }),
     praise: { detected: false, quote: '' },
   }
 }
@@ -528,7 +506,7 @@ function buildCompactThreadBlock(label, thread) {
 
   if (summaryEntries.length) {
     lines.push('')
-    lines.push('PAST SESSIONS (one summary per ended scan):')
+    lines.push('PAST SESSIONS (story memory per ended scan — use ONE beat at a time, never dump all):')
     for (const entry of summaryEntries) {
       lines.push(`--- Scan ${entry.scanNumber} [${entry.role} thread] ---`)
       lines.push(entry.summary)
@@ -1258,6 +1236,7 @@ export function parseSessionSummaryDetails(sessionSummaries) {
       multiline?.[1]?.trim() || singleLine?.[1]?.trim() || block.replace(/^summary:\s*/m, '').trim()
     const brandPraise = parseBrandProductPraise(summary)
     const praiseQuote = praiseMatch?.[1]?.trim() || brandPraise.quote || ''
+    const storyBody = extractStoryFromSummary(summary)
     const userSaidMatch = summary.match(
       /USER SAID:\s*\n([\s\S]*?)(?=\n\nMYRA SAID:|\n\nBRAND PRODUCT PRAISE:|$)/i,
     )
@@ -1266,11 +1245,13 @@ export function parseSessionSummaryDetails(sessionSummaries) {
           /(?:SENDER|RECEIVER) SAID:\s*\n([\s\S]*?)(?=\n\nMYRA SAID:|\n\nBRAND PRODUCT PRAISE:|\n\nFACTS TO REMEMBER:|$)/i,
         )
       : null
-    const userSaid = (userSaidMatch?.[1] ?? legacyUserMatch?.[1] ?? '')
+    const legacyUserSaid = (userSaidMatch?.[1] ?? legacyUserMatch?.[1] ?? '')
       .split('\n')
       .map((line) => line.replace(/^(sender|receiver):\s*/i, '').replace(/^\d+\.\s*/, '').trim())
       .filter(Boolean)
       .join(' | ')
+    // Prefer story narrative for dashboard / memory snippets; fall back to legacy USER SAID.
+    const userSaid = storyBody || legacyUserSaid
 
     entries.push({
       scanNumber,

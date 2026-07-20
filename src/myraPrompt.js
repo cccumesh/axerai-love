@@ -709,14 +709,14 @@ export function buildMyraUserPrompt({
       sessionRole === 'RECEIVER'
         ? `TASK: RECEIVER RETURN SCAN (30–55 words).
 1) Short playful missing/gayab tease.
-2) Then ONE true beat from ledger USER SAID / sender story only — no invented facts.
+2) Then ONE true beat from PAST session STORY in the ledger / sender gift story — no invented facts.
 3) If ledger is thin: one simple question, nothing else.
-FORBIDDEN: invent names, love story, occasion, or why they left. No first-scan wow, no city, no re-intro speech.`
+FORBIDDEN: invent names, love story, occasion, or why they left. Do NOT dump the whole story in one reply. No first-scan wow, no city, no re-intro speech.`
         : `TASK: SENDER RETURN SCAN (30–55 words).
 1) Short bestie "kahan gayab tha" tease — they left and came back.
-2) Look at AXERAI_LEDGER USER SAID only. Use ONLY facts the user actually typed/spoke.
+2) Read PAST session STORY in AXERAI_LEDGER. Use ONLY real facts from that story.
 3) Next step from real gaps only: no name yet → ask name; name exists but no gift-for → ask who gift is for; etc.
-FORBIDDEN: invent girlfriend/boyfriend name, occasion, love story, mood, or reasons. Do not "fill gaps" with imagination. Thin ledger = short tease + one honest question. No boot, no city, no first-meeting wow.`
+FORBIDDEN: invent girlfriend/boyfriend name, occasion, love story, mood, or reasons. Do not "fill gaps" with imagination. Do NOT dump the whole story — one beat + one hook. Thin ledger = short tease + one honest question. No boot, no city, no first-meeting wow.`
 
     return `${runtimeNote}
 ${roleCommand ? `${roleCommand}\n` : ''}${locationRule}
@@ -726,7 +726,7 @@ ${contextJson}
 
 ${ledgerBlock}${antiLoopBlock}
 
-HARD RULE: If USER SAID is empty or only hello/bye — do NOT invent a story. Tease gayab + ask name (or the same open ask from last real Myra question).
+HARD RULE: If PAST STORY is empty or only hello/bye — do NOT invent a story. Tease gayab + ask name (or the same open ask from last real Myra question / OPEN HOOK).
 
 ${resumeTask}`
   }

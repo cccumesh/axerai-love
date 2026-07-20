@@ -27,14 +27,20 @@ function ensureAudioGraph() {
 function measureAudioLevel() {
   if (!analyser || !dataArray) return 0
 
-  analyser.getByteTimeDomainData(dataArray)
+  // Prefer mid speech frequencies for mouth open amount (0 silent → 1 loud).
+  analyser.getByteFrequencyData(dataArray)
+  const n = dataArray.length
+  const start = Math.floor(n * 0.08)
+  const end = Math.floor(n * 0.55)
   let sum = 0
-  for (let i = 0; i < dataArray.length; i += 1) {
-    const v = (dataArray[i] - 128) / 128
-    sum += v * v
+  let count = 0
+  for (let i = start; i < end; i += 1) {
+    sum += dataArray[i]
+    count += 1
   }
-  const rms = Math.sqrt(sum / dataArray.length)
-  return Math.min(1, Math.max(0, (rms - 0.02) * 4.5))
+  const avg = count ? sum / count / 255 : 0
+  // Map voice energy to 0..1 shape-key influence.
+  return Math.min(1, Math.max(0, (avg - 0.04) * 1.55))
 }
 
 function proceduralMouthLevel() {

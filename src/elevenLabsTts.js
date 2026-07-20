@@ -156,6 +156,25 @@ export async function ensureMobileAudioUnlocked({ force = false } = {}) {
     return mobileAudioPrimed
   }
 
+  // Already primed: force refresh must NOT dip TTS element volume (causes quiet 2nd line on iPhone).
+  if (mobileAudioPrimed && force) {
+    try {
+      if (ctx?.state === 'suspended') await withTimeout(ctx.resume(), 800)
+      const unlockEl = getUnlockAudioElement()
+      if (unlockEl.paused) {
+        unlockEl.muted = false
+        unlockEl.volume = 0.01
+        unlockEl.loop = true
+        unlockEl.src = SILENT_WAV
+        await withTimeout(unlockEl.play(), 800)
+      }
+      window.speechSynthesis?.resume?.()
+    } catch {
+      // ignore
+    }
+    return true
+  }
+
   if (unlockInFlight) return unlockInFlight
 
   unlockInFlight = (async () => {
@@ -174,7 +193,7 @@ export async function ensureMobileAudioUnlocked({ force = false } = {}) {
         await withTimeout(unlockEl.play(), 1200)
       }
 
-      // Prime the same element that will play ElevenLabs later.
+      // First prime only — never again lower the TTS element volume after this.
       const ttsEl = getTtsAudioElement()
       if (!currentAudio) {
         ttsEl.muted = false
@@ -212,6 +231,31 @@ export async function ensureMobileAudioUnlocked({ force = false } = {}) {
   })()
 
   return unlockInFlight
+}
+
+/** Pause near-silent unlock loop so it cannot duck Myra TTS on iPhone. */
+function pauseUnlockLoopForTts() {
+  if (!unlockAudioEl) return
+  try {
+    unlockAudioEl.pause()
+  } catch {
+    // ignore
+  }
+}
+
+function resumeUnlockLoopAfterTts() {
+  if (!isAppleMobileBrowser() || !unlockAudioEl) return
+  try {
+    unlockAudioEl.muted = false
+    unlockAudioEl.volume = 0.01
+    unlockAudioEl.loop = true
+    if (unlockAudioEl.paused) {
+      if (!unlockAudioEl.src) unlockAudioEl.src = SILENT_WAV
+      void unlockAudioEl.play().catch(() => {})
+    }
+  } catch {
+    // ignore
+  }
 }
 
 /** Call on user tap so iOS allows ElevenLabs playback after async Gemini. */
@@ -332,6 +376,7 @@ export function playQueuedTtsFromUserGesture() {
   const objectUrl = URL.createObjectURL(job.blob)
   currentObjectUrl = objectUrl
   const audio = getTtsAudioElement()
+  pauseUnlockLoopForTts()
   audio.muted = false
   audio.volume = 1
   audio.loop = false
@@ -347,6 +392,7 @@ export function playQueuedTtsFromUserGesture() {
     audio._objectUrl = null
     if (currentAudio === audio) currentAudio = null
     currentAbort = null
+    resumeUnlockLoopAfterTts()
   }
 
   audio.onended = () => {
@@ -364,17 +410,9 @@ export function playQueuedTtsFromUserGesture() {
     job.resolvePlay?.()
   }
 
-  // Keep unlock loop warm for later lines.
-  const unlockEl = getUnlockAudioElement()
-  unlockEl.muted = false
-  unlockEl.volume = 0.01
-  unlockEl.loop = true
-  if (unlockEl.paused) {
-    unlockEl.src = SILENT_WAV
-    void unlockEl.play().catch(() => {})
-  }
-
+  // Keep unlock loop warm for later lines — but not while TTS is playing (ducks volume on iPhone).
   startSpeechLipSync()
+  audio.volume = 1
   // Synchronous play() inside user gesture — required on iPhone.
   const playPromise = audio.play()
   appleGestureUnlocked = true
@@ -845,6 +883,7 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
   const objectUrl = URL.createObjectURL(blob)
   currentObjectUrl = objectUrl
   const audio = getTtsAudioElement()
+  pauseUnlockLoopForTts()
   audio.muted = false
   audio.volume = 1
   audio.loop = false
@@ -865,6 +904,7 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
     audio._objectUrl = null
     if (currentAudio === audio) currentAudio = null
     currentAbort = null
+    resumeUnlockLoopAfterTts()
   }
 
   audio.onended = () => {
@@ -888,6 +928,8 @@ async function playBlobViaHtmlAudio(blob, { onStart, onEnd, onError }) {
   }
 
   try {
+    audio.muted = false
+    audio.volume = 1
     await audio.play()
     notifyAudioNeedsTap(false)
     onStart?.()

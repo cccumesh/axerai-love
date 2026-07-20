@@ -1180,6 +1180,35 @@ function App() {
     })
   }, [])
 
+  /**
+   * iPhone: track.enabled=false still keeps play-and-record session → ducks TTS.
+   * Fully stop analyser mic + recognition while Myra speaks; STT restarts via onDone.
+   */
+  const releaseMicForTts = useCallback(() => {
+    pauseLiveMicCapture()
+    if (!isAppleMobileBrowser()) return
+
+    try {
+      liveMicRecognitionRef.current?.abort()
+    } catch {
+      // ignore
+    }
+    liveMicRecognitionRef.current = null
+
+    if (liveMicRafRef.current) {
+      cancelAnimationFrame(liveMicRafRef.current)
+      liveMicRafRef.current = null
+    }
+    liveMicAnalyserRef.current = null
+    if (liveMicAudioCtxRef.current) {
+      liveMicAudioCtxRef.current.close().catch(() => {})
+      liveMicAudioCtxRef.current = null
+    }
+    liveMicStreamRef.current?.getTracks().forEach((track) => track.stop())
+    liveMicStreamRef.current = null
+    setIsListening(false)
+  }, [pauseLiveMicCapture])
+
   const ensureMicPermission = useCallback(async () => {
     if (startupPermissionsDoneRef.current) return true
     try {
@@ -1338,10 +1367,11 @@ function App() {
 
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
-    pauseLiveMicCapture()
-    // Do not await unlock here — it can steal the gesture window. Choocha speaks browser TTS directly.
-    void ensureMobileAudioUnlocked({ force: true })
+    // Set speaking flag BEFORE releasing mic so recognition.onend does not immediately restart.
     aiSpeakingRef.current = true
+    releaseMicForTts()
+    // Soft unlock only — force:true used to dip TTS volume to 0.01 and quiet the next line.
+    void ensureMobileAudioUnlocked({ force: false })
 
     let speechFinished = false
     let safetyTimer = null
@@ -1357,6 +1387,7 @@ function App() {
       aiSpeakingRef.current = false
       setisMyraTalking(false)
       setIsAiThinking(false)
+      // Mic restart is caller's job (resumeMicAfterGemini). Do not start here — double getUserMedia races.
       onDone?.()
     }
 
@@ -1408,7 +1439,7 @@ function App() {
     }
 
     speakWithBrowserTts(browserSpeech, finish, startTalkingAnimation)
-  }, [pauseLiveMicCapture, speakWithBrowserTts])
+  }, [releaseMicForTts, speakWithBrowserTts])
 
   /** Scripted error lines — Myra speaks unless situation is in MYRA_ERROR_SILENT. */
   const speakMyraErrorLine = useCallback(
@@ -1596,8 +1627,10 @@ function mapGeminiCallType(reason) {
 
     if (aiSpeakingRef.current) return
 
+    // Non-Apple: tracks were only muted. Apple: stream was fully stopped → softRestart recreates.
     resumeLiveMicCapture()
-    unlockMobileSpeechAudio({ force: true })
+    // Soft unlock — force:true can dip TTS volume if a line still finishing.
+    unlockMobileSpeechAudio({ force: false })
     let ok = await startLiveMicModeRef.current({ softRestart: true })
     if (!ok) {
       await new Promise((resolve) => {

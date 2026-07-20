@@ -4,29 +4,34 @@ import { SUMMARY_MODEL_CHAIN } from './geminiModels.js'
 
 const GEMINI_API_KEY = String(import.meta.env.VITE_GEMINI_API_KEY ?? '').trim()
 
-/** Dedicated system prompt — ONLY for exit summary call. NOT Myra personality. */
+/**
+ * Dedicated system prompt — ONLY for exit summary call. NOT Myra personality.
+ * Story memory for return scans; Myra still speaks one-beat/hooks in chat (separate prompt).
+ */
 export const MYRA_SESSION_SUMMARY_SYSTEM = `You are the Axerai Soul Ledger Archivist — NOT Myra.
 
-Compress ONE ended scan into memory for future sessions.
+Compress ONE ended scan into a short STORY memory for future sessions.
 
 INPUT: labelled chat log (sender:/receiver:/myra: lines) from ONE scan only.
-OUTPUT: exactly 3 sections below. Plain text. No markdown. No emojis.
+OUTPUT: plain text. No markdown. No emojis. No bullet transcript dump.
 
 REQUIRED FORMAT (exact headers, this order):
 
 THREAD: Sender | Receiver
 
-USER SAID:
-- Copy every sender: or receiver: line from the log WORD FOR WORD.
-- One line per message. Keep the speaker prefix (sender: or receiver:).
-- Do NOT shorten, paraphrase, or fix spelling. Verbatim only.
+STORY:
+Write 4–8 short sentences as a narrative of what happened this scan.
+Style example: "Sender Chetan. Gift for his sister Nayna on her birthday. Chetan said Nayna is very sweet and loves Naruto. Myra asked what else she likes..."
+Rules:
+- ONLY facts clearly present in the log. Do NOT invent names, relationships, gifts, occasions, or preferences.
+- Prefer user (sender:/receiver:) facts as the spine of the story.
+- Mention Myra only lightly (e.g. what she asked next) — do not paste full Myra monologues.
+- If the user only said hello / almost nothing: write a thin honest story (e.g. "Sender just arrived; name not shared yet.").
+- Keep it readable for a future Myra session — memory, not a chat replay.
+- Do NOT dump every line. Do NOT add EMOTIONS / FACTS / OPEN THREADS sections.
 
-MYRA SAID:
-- One condensed line per myra: reply from the log, in order.
-- Shorten Myra's rambling — keep the emotional beat only.
-- CRITICAL: If a Myra line ends with a question, that question MUST appear verbatim at the end of that condensed line.
-- CRITICAL: The LAST Myra line in the log — its closing question (if any) must be copied VERBATIM, never shortened or dropped.
-- Do not invent Myra lines not in the log.
+OPEN HOOK:
+- One short line: the last unresolved question Myra asked (verbatim if present), OR "none".
 
 BRAND PRODUCT PRAISE:
 - yes ONLY if user praised the physical product: RICHERA card, bracelet, box, packaging, gift design.
@@ -34,7 +39,7 @@ BRAND PRODUCT PRAISE:
 - If yes: BRAND PRODUCT PRAISE: yes | "exact user words from log"
 - If none: BRAND PRODUCT PRAISE: none
 
-SCOPE: This scan's log only. Do not merge other scans. Do not add EMOTIONS, FACTS, or OPEN THREADS sections.`
+SCOPE: This scan's log only. Do not merge other scans.`
 
 let geminiClient = null
 
@@ -85,7 +90,11 @@ export function condenseMyraLineForSummary(text, { isLast = false } = {}) {
   if (!t) return ''
 
   const closingQuestion = extractMyraClosingQuestion(t)
-  if (isLast && closingQuestion) return closingQuestion.length <= 220 ? `${t.slice(0, 120).trim()}... ${closingQuestion}` : closingQuestion
+  if (isLast && closingQuestion) {
+    return closingQuestion.length <= 220
+      ? `${t.slice(0, 120).trim()}... ${closingQuestion}`
+      : closingQuestion
+  }
 
   if (t.length <= 140) return t
 
@@ -94,13 +103,56 @@ export function condenseMyraLineForSummary(text, { isLast = false } = {}) {
   return `${body}...`
 }
 
+/**
+ * Local fallback story when Gemini summary is unavailable.
+ * Built only from log facts — no invention.
+ */
+export function buildLocalStorySummary({
+  roleKey = 'sender',
+  userLines = [],
+  myraLines = [],
+} = {}) {
+  const threadLabel = roleKey === 'receiver' ? 'Receiver' : 'Sender'
+  const who = roleKey === 'receiver' ? 'Receiver' : 'Sender'
+  const facts = userLines.map((line) => String(line ?? '').trim()).filter(Boolean)
+  const lastMyra = myraLines.length ? String(myraLines[myraLines.length - 1] ?? '').trim() : ''
+  const openHook = extractMyraClosingQuestion(lastMyra) || 'none'
+
+  let story
+  if (!facts.length) {
+    story = `${who} opened a scan but shared almost nothing yet. Name and gift details unknown.`
+  } else if (facts.length === 1) {
+    story = `${who} said: "${facts[0]}". Conversation just started.`
+  } else {
+    const head = facts.slice(0, 4).map((f) => `"${f}"`).join('; ')
+    const more = facts.length > 4 ? ` Plus ${facts.length - 4} more user note(s).` : ''
+    story = `${who} shared these beats this scan: ${head}.${more}`
+    if (openHook !== 'none') {
+      story += ` Myra's last open ask was about continuing from there.`
+    }
+  }
+
+  return [
+    `THREAD: ${threadLabel}`,
+    '',
+    'STORY:',
+    story,
+    '',
+    'OPEN HOOK:',
+    openHook,
+    '',
+    'BRAND PRODUCT PRAISE:',
+    'none',
+  ].join('\n')
+}
+
 async function requestSummary(userPrompt) {
   if (USE_API_PROXY) {
     const payload = await askGeminiViaProxy({
       userPrompt,
       systemInstruction: MYRA_SESSION_SUMMARY_SYSTEM,
       models: SUMMARY_MODEL_CHAIN,
-      generationConfig: { temperature: 0.2, topP: 0.85, maxOutputTokens: 768 },
+      generationConfig: { temperature: 0.25, topP: 0.85, maxOutputTokens: 900 },
     })
     return {
       text: payload.text,
@@ -118,7 +170,7 @@ async function requestSummary(userPrompt) {
       const model = client.getGenerativeModel({
         model: modelName,
         systemInstruction: MYRA_SESSION_SUMMARY_SYSTEM,
-        generationConfig: { temperature: 0.2, topP: 0.85, maxOutputTokens: 768 },
+        generationConfig: { temperature: 0.25, topP: 0.85, maxOutputTokens: 900 },
       })
       const result = await model.generateContent(userPrompt)
       const text = result.response.text()?.trim()
@@ -157,17 +209,17 @@ export async function summarizeSessionDialogue({ dialogue, roleKey = 'sender', s
   const ctx = buildRoleContext(roleKey)
   const { myraCount, userCount } = countDialogueSpeakers(log)
 
-  const userPrompt = `Write session ${scanNumber} summary.
+  const userPrompt = `Write session ${scanNumber} STORY summary.
 
 ${ctx.whoLine}
 
 THIS SCAN CHAT LOG ONLY:
 ${log}
 
-THREAD: ${ctx.threadLabel}
-USER SAID: copy every ${ctx.humanLabel}: line verbatim — same words, same spelling.
-MYRA SAID: one short line per myra: reply; keep each line's closing question verbatim; last Myra question is mandatory verbatim.
-End with BRAND PRODUCT PRAISE (product only, not GF/BF).
+Output THREAD: ${ctx.threadLabel}
+Then STORY (4–8 sentences, only real log facts — like "Chetan bought this for sister Nayna's birthday; she likes Naruto...").
+Then OPEN HOOK (last Myra question verbatim, or none).
+Then BRAND PRODUCT PRAISE (product only, not GF/BF).
 ${userCount > 0 ? `${userCount} user line(s) in log.` : 'No user lines.'}
 ${myraCount > 0 ? `${myraCount} myra line(s) in log.` : 'No myra lines.'}`
 
@@ -201,4 +253,20 @@ export function parseBrandProductPraise(summaryText) {
   }
 
   return { detected: false, quote: '' }
+}
+
+/** Pull STORY body from a summary block (story format or legacy). */
+export function extractStoryFromSummary(summaryText) {
+  const text = String(summaryText ?? '').trim()
+  if (!text) return ''
+
+  const storyMatch = text.match(
+    /STORY:\s*\n([\s\S]*?)(?=\n\s*OPEN HOOK:|\n\s*BRAND PRODUCT PRAISE:|\n\s*USER SAID:|\n\s*MYRA SAID:|$)/i,
+  )
+  if (storyMatch?.[1]?.trim()) return storyMatch[1].trim()
+
+  // Legacy transcript-style summaries — keep as-is for old rows.
+  return text
+    .replace(/\n\s*BRAND PRODUCT PRAISE:[\s\S]*$/i, '')
+    .trim()
 }

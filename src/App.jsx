@@ -1522,9 +1522,10 @@ function App() {
 
     window.speechSynthesis.cancel()
     stopElevenLabsSpeech()
-    // Hide live-mic UI + kill mic session BEFORE audio — iOS ducks TTS if mic stays open.
+    // Kill mic + keep live-mic UI hidden while audio loads.
+    // Do NOT set isMyraTalking yet — talking anim must wait for real speaker audio (onStart).
     aiSpeakingRef.current = true
-    setisMyraTalking(true)
+    setIsAiThinking(true)
     setIsListening(false)
     releaseMicForTts()
     void ensureMobileAudioUnlocked({ force: false })
@@ -1552,6 +1553,7 @@ function App() {
       finish()
     }, MYRA_TTS_SAFETY_MS)
 
+    // Only when sound actually starts leaving the speaker.
     const startTalkingAnimation = () => {
       startSpeechLipSync()
       setisMyraTalking(true)
